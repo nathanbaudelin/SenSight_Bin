@@ -1,0 +1,58 @@
+version: '3.9'
+
+services:
+  backend:
+    build: ./backend
+    container_name: smartbin-backend
+    ports:
+      - "${BACKEND_PORT}:3000"
+    depends_on:
+      - mongodb
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - MONGO_URL=${MONGO_URL}
+      - AI_URL=${AI_URL}
+    # volumes:
+    #   - ./backend:/app
+
+  ai:
+    build: ./ai
+    container_name: smartbin-ai
+    ports:
+      - "${AI_PORT}:8000"
+    depends_on:
+      - backend
+      - mongodb
+    environment:
+      - MONGO_URL=${MONGO_URL}
+    # volumes:
+    #   - ./ai:/app
+
+  # frontend:
+  #   build: ./frontend
+  #   container_name: smartbin-frontend
+  #   ports:
+  #     - "${FRONTEND_PORT}:3000"
+  #   depends_on:
+  #     - backend
+
+  mongodb:
+    image: mongo:7
+    container_name: smartbin-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  mongo-express:
+    image: mongo-express
+    container_name: smartbin-mongo-express
+    ports:
+      - "8081:8081"
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=mongodb
+    depends_on:
+      - mongodb
+
+volumes:
+  mongo-data:
