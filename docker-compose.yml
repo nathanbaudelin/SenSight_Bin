@@ -28,13 +28,13 @@ services:
     # volumes:
     #   - ./ai:/app
 
-  # frontend:
-  #   build: ./frontend
-  #   container_name: smartbin-frontend
-  #   ports:
-  #     - "${FRONTEND_PORT}:3000"
-  #   depends_on:
-  #     - backend
+  frontend:
+    build: ./frontend
+    container_name: smartbin-frontend
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    depends_on:
+      - backend
 
   mongodb:
     image: mongo:7
