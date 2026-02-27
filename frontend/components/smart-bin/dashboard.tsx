@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Bell,
+  CheckCircle2,
   CircleAlert,
   ClipboardX,
+  Loader2,
   Wifi,
   WifiOff,
   MapPinned,
@@ -15,7 +17,6 @@ import {
   TrendingDown,
   TrendingUp,
   Trash2,
-  Truck,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { Bin } from "./bin-data";
 import { getBinStatus, initialBins } from "./bin-data";
@@ -52,6 +54,15 @@ type WifiNetwork = {
   secure: boolean;
   channel: number;
   distance: string;
+};
+
+type PendingCoords = { lat: number; lng: number };
+type RouteStopPayload = { id: string; lat: number; lng: number };
+type SimulatedRoutePayload = {
+  routeId: string;
+  provider: "simulated-backend";
+  mode: "driving";
+  orderedStops: RouteStopPayload[];
 };
 
 const FILTERS: { key: FilterKey; label: string }[] = [
@@ -113,6 +124,25 @@ export default function SmartBinDashboard() {
   const [wifiScanning, setWifiScanning] = useState(false);
   const [wifiError, setWifiError] = useState<string | null>(null);
   const [wifiConnecting, setWifiConnecting] = useState<string | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [pendingAddCoords, setPendingAddCoords] = useState<PendingCoords | null>(null);
+  const [createArea, setCreateArea] = useState("");
+  const [createNotes, setCreateNotes] = useState("");
+  const [createLastCollection, setCreateLastCollection] = useState("new");
+  const [createNetworks, setCreateNetworks] = useState<WifiNetwork[]>([]);
+  const [createWifiScanning, setCreateWifiScanning] = useState(false);
+  const [createWifiError, setCreateWifiError] = useState<string | null>(null);
+  const [createWifiConnecting, setCreateWifiConnecting] = useState<string | null>(null);
+  const [createSelectedNetworkId, setCreateSelectedNetworkId] = useState<string | null>(null);
+  const [createLinkedSsid, setCreateLinkedSsid] = useState<string | null>(null);
+  const [createInitialFill, setCreateInitialFill] = useState<number | null>(null);
+  const [createLastReading, setCreateLastReading] = useState("awaiting connection");
+  const [createFormError, setCreateFormError] = useState<string | null>(null);
+  const [routePath, setRoutePath] = useState<{ lat: number; lng: number }[]>([]);
+  const [routeStopIds, setRouteStopIds] = useState<string[]>([]);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [lastGeneratedRouteId, setLastGeneratedRouteId] = useState<string | null>(null);
 
   const filteredBins = useMemo(() => filterBins(bins, filter, query), [bins, filter, query]);
   const connectedBins = useMemo(
@@ -132,6 +162,50 @@ export default function SmartBinDashboard() {
       .map((bin) => bin.lastReading)
       .find((reading) => Boolean(reading)) ?? "Live";
   }, [bins]);
+  const nextBinIdPreview = useMemo(
+    () => `BCN-NW-${String(bins.length + 1).padStart(3, "0")}`,
+    [bins.length]
+  );
+  const createSelectedNetwork =
+    createNetworks.find((network) => network.id === createSelectedNetworkId) ?? null;
+  const routeStopsPreview = routeStopIds
+    .map((id) => bins.find((bin) => bin.id === id)?.id)
+    .filter(Boolean) as string[];
+
+  const resetCreateBinDraft = () => {
+    setCreateArea("");
+    setCreateNotes("");
+    setCreateLastCollection("new");
+    setCreateNetworks([]);
+    setCreateWifiScanning(false);
+    setCreateWifiError(null);
+    setCreateWifiConnecting(null);
+    setCreateSelectedNetworkId(null);
+    setCreateLinkedSsid(null);
+    setCreateInitialFill(null);
+    setCreateLastReading("awaiting connection");
+    setCreateFormError(null);
+  };
+
+  const buildSimulatedRoutePayload = (): SimulatedRoutePayload | null => {
+    const urgentBins = bins
+      .filter((bin) => bin.fill >= 50)
+      .sort((a, b) => b.fill - a.fill)
+      .slice(0, 4);
+    const fallbackBins = bins.slice(0, 4);
+    const selectedStops = (urgentBins.length >= 2 ? urgentBins : fallbackBins)
+      .slice(0, 4)
+      .map((bin) => ({ id: bin.id, lat: bin.lat, lng: bin.lng }));
+
+    if (selectedStops.length < 2) return null;
+
+    return {
+      routeId: `route-${Date.now()}`,
+      provider: "simulated-backend",
+      mode: "driving",
+      orderedStops: selectedStops,
+    };
+  };
 
   useEffect(() => {
     setWifiError(null);
@@ -163,22 +237,163 @@ export default function SmartBinDashboard() {
   }, []);
 
   const handleAddBin = (coords: { lat: number; lng: number }) => {
-    const nextId = `BCN-NW-${String(bins.length + 1).padStart(3, "0")}`;
-    const newBin: Bin = {
-      id: nextId,
-      area: "Added point",
-      lat: coords.lat,
-      lng: coords.lng,
-      fill: 0,
-      lastCollection: "new",
-      deviceSsid: null,
-      lastReading: "awaiting connection",
-      notes: "Awaiting device link",
-    };
-    setBins((prev) => [newBin, ...prev]);
-    setSelectedId(newBin.id);
+    setPendingAddCoords(coords);
+    resetCreateBinDraft();
+    setCreateDialogOpen(true);
     setAddMode(false);
     setMoveMode(false);
+  };
+
+  const handleCreateDialogChange = (open: boolean) => {
+    setCreateDialogOpen(open);
+    if (!open) {
+      setPendingAddCoords(null);
+      resetCreateBinDraft();
+    }
+  };
+
+  const handleCreateWifiScan = async () => {
+    setCreateWifiScanning(true);
+    setCreateWifiError(null);
+    setCreateFormError(null);
+    try {
+      const response = await fetch("/api/wifi/scan", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("Scan failed");
+      }
+      const data = await response.json();
+      const networks = Array.isArray(data.networks) ? data.networks : [];
+      setCreateNetworks(networks);
+      if (networks.length) {
+        setCreateSelectedNetworkId((prev) => prev ?? networks[0].id);
+      }
+    } catch (error) {
+      setCreateWifiError("Impossible de scanner les reseaux WiFi ESP32.");
+    } finally {
+      setCreateWifiScanning(false);
+    }
+  };
+
+  const handleCreateWifiConnect = async () => {
+    if (!createSelectedNetwork) {
+      setCreateFormError("Selectionne un reseau ESP32 avant la connexion.");
+      return;
+    }
+    setCreateWifiConnecting(createSelectedNetwork.ssid);
+    setCreateWifiError(null);
+    setCreateFormError(null);
+    try {
+      const response = await fetch("/api/wifi/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssid: createSelectedNetwork.ssid }),
+      });
+      if (!response.ok) {
+        throw new Error("Connection failed");
+      }
+      const data = (await response.json().catch(() => null)) as
+        | { fill?: number; lastReading?: string }
+        | null;
+      const now = new Date().toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+      setCreateLinkedSsid(createSelectedNetwork.ssid);
+      setCreateInitialFill(
+        typeof data?.fill === "number"
+          ? clamp(Math.round(data.fill), 0, 100)
+          : clamp(Math.round(Math.random() * 60 + 20), 5, 98)
+      );
+      setCreateLastReading(data?.lastReading ?? now);
+    } catch (error) {
+      setCreateWifiError("Impossible de se connecter a l'ESP32 selectionne.");
+    } finally {
+      setCreateWifiConnecting(null);
+    }
+  };
+
+  const handleConfirmCreateBin = () => {
+    if (!pendingAddCoords) {
+      setCreateFormError("Position de la bin introuvable. Reclique sur la map.");
+      return;
+    }
+    if (!createArea.trim()) {
+      setCreateFormError("Le champ Area / Zone est obligatoire.");
+      return;
+    }
+    if (!createLinkedSsid) {
+      setCreateFormError("Tu dois connecter un ESP32 en WiFi avant de creer la bin.");
+      return;
+    }
+
+    const newBin: Bin = {
+      id: nextBinIdPreview,
+      area: createArea.trim(),
+      lat: pendingAddCoords.lat,
+      lng: pendingAddCoords.lng,
+      fill: createInitialFill ?? 0,
+      lastCollection: createLastCollection.trim() || "new",
+      deviceSsid: createLinkedSsid,
+      lastReading: createLastReading,
+      notes: createNotes.trim() || "ESP32 linked during setup",
+    };
+
+    setBins((prev) => [newBin, ...prev]);
+    setSelectedId(newBin.id);
+    handleCreateDialogChange(false);
+  };
+
+  const handleGenerateRoute = async () => {
+    setRouteLoading(true);
+    setRouteError(null);
+    try {
+      // Simulated backend response: ordered bins to visit + coordinates.
+      const simulatedPayload = buildSimulatedRoutePayload();
+      if (!simulatedPayload) {
+        throw new Error("Not enough bins to generate a route.");
+      }
+
+      const osrmCoordinates = simulatedPayload.orderedStops
+        .map((stop) => `${stop.lng},${stop.lat}`)
+        .join(";");
+
+      const response = await fetch(
+        `https://router.project-osrm.org/route/v1/driving/${osrmCoordinates}?overview=full&geometries=geojson`,
+        { cache: "no-store" }
+      );
+
+      if (!response.ok) {
+        throw new Error("Routing provider unavailable");
+      }
+
+      const data = await response.json();
+      const geometry = data?.routes?.[0]?.geometry?.coordinates;
+      if (!Array.isArray(geometry) || geometry.length < 2) {
+        throw new Error("Invalid route geometry");
+      }
+
+      const path = geometry
+        .filter(
+          (point: unknown): point is [number, number] =>
+            Array.isArray(point) && point.length >= 2 && point.every((value) => typeof value === "number")
+        )
+        .map(([lng, lat]) => ({ lat, lng }));
+
+      if (path.length < 2) {
+        throw new Error("Empty route path");
+      }
+
+      setRoutePath(path);
+      setRouteStopIds(simulatedPayload.orderedStops.map((stop) => stop.id));
+      setLastGeneratedRouteId(simulatedPayload.routeId);
+    } catch (error) {
+      setRouteError("Impossible de generer la route pour le moment.");
+      setRoutePath([]);
+      setRouteStopIds([]);
+    } finally {
+      setRouteLoading(false);
+    }
   };
 
   const updateSelectedBin = (patch: Partial<Bin>) => {
@@ -299,68 +514,41 @@ export default function SmartBinDashboard() {
         </div>
 
         <div className="relative mx-auto flex max-w-7xl flex-col gap-10 px-6 pb-20 pt-10">
-          <section id="overview" className="space-y-6 scroll-mt-28">
-            <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-              <MapPinned className="h-3.5 w-3.5" />
-              Active coverage - Barcelona
-            </div>
-            <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+          <section id="overview" className="space-y-4 scroll-mt-28">
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)] lg:items-start">
               <div className="space-y-4">
+                <div className="inline-flex w-fit max-w-full items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  <MapPinned className="h-3.5 w-3.5" />
+                  Active coverage - Barcelona
+                </div>
                 <h1 className="text-4xl font-semibold tracking-tight text-slate-900 md:text-5xl">
                   Smart Waste Control Center
                 </h1>
                 <p className="max-w-xl text-base text-slate-600 md:text-lg">
-                  IoT prototype for connected smart bins. Track fill levels, plan collections,
-                  and trigger optimized routes across the city.
+                  IoT prototype for connected smart bins. Track fill levels, plan collections, and
+                  trigger optimized routes across the city.
                 </p>
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button
-                    onClick={() =>
-                      setAddMode((prev) => {
-                        const next = !prev;
-                        if (next) setMoveMode(false);
-                        return next;
-                      })
-                    }
-                    size="lg"
-                    className={cn(
-                      "rounded-full bg-slate-900 text-white hover:bg-slate-800",
-                      addMode && "bg-emerald-600 hover:bg-emerald-600"
-                    )}
-                  >
-                    <Plus className="h-4 w-4" />
-                    {addMode ? "Add mode active" : "Add a bin"}
-                  </Button>
-                  <Button size="lg" variant="outline" className="rounded-full border-slate-200 bg-white">
-                    <Route className="h-4 w-4" />
-                    Generate route
-                  </Button>
-                  <Button size="lg" variant="outline" className="rounded-full border-slate-200 bg-white">
-                    <Truck className="h-4 w-4" />
-                    View fleet
-                  </Button>
-                </div>
               </div>
-              <div className="rounded-3xl border border-white/50 bg-white/70 p-6 shadow-xl backdrop-blur">
+              <div className="w-full rounded-3xl border border-white/50 bg-white/70 p-5 shadow-lg backdrop-blur lg:max-w-sm lg:justify-self-end">
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-sm text-slate-500">Connected bins</div>
-                    <div className="text-3xl font-semibold">{connectedBins} / {bins.length}</div>
+                    <div className="text-2xl font-semibold">{connectedBins} / {bins.length}</div>
                   </div>
-                  <div className="rounded-2xl bg-emerald-500/10 p-3 text-emerald-600">
-                    <TrendingUp className="h-6 w-6" />
+                  <div className="rounded-2xl bg-emerald-500/10 p-2.5 text-emerald-600">
+                    <TrendingUp className="h-5 w-5" />
                   </div>
                 </div>
-                <div className="mt-4 space-y-3 text-sm text-slate-600">
-                  <div className="flex items-center justify-between">
+                <div className="mt-3 space-y-2.5 text-sm text-slate-600">
+                  <div className="flex items-center justify-between gap-3">
                     <span>Latest sensor sync</span>
                     <span className="font-semibold text-slate-900">{latestReading}</span>
                   </div>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <span>AI load prediction</span>
                     <span className="font-semibold text-slate-900">87% accuracy</span>
                   </div>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <span>Average collection time</span>
                     <span className="font-semibold text-slate-900">23 min</span>
                   </div>
@@ -406,27 +594,80 @@ export default function SmartBinDashboard() {
 
           <section id="map" className="grid gap-6 scroll-mt-28 lg:grid-cols-[2.2fr_1fr]">
             <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-xl font-semibold">Bin map</h2>
-                  <p className="text-sm text-slate-500">Click a bin to see details.</p>
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl font-semibold">Bin map</h2>
+                    <p className="text-sm text-slate-500">Click a bin to see details.</p>
+                  </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {FILTERS.map((item) => (
-                    <button
-                      key={item.key}
-                      type="button"
-                      onClick={() => setFilter(item.key)}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {FILTERS.map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setFilter(item.key)}
+                        className={cn(
+                          "rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition",
+                          filter === item.key && "border-slate-900 bg-slate-900 text-white"
+                        )}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="ml-2 flex flex-wrap items-center gap-2">
+                    <Button
+                      onClick={() =>
+                        setAddMode((prev) => {
+                          const next = !prev;
+                          if (next) setMoveMode(false);
+                          return next;
+                        })
+                      }
+                      size="sm"
                       className={cn(
-                        "rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition",
-                        filter === item.key && "border-slate-900 bg-slate-900 text-white"
+                        "rounded-full bg-slate-900 text-white hover:bg-slate-800",
+                        addMode && "bg-emerald-600 hover:bg-emerald-600"
                       )}
                     >
-                      {item.label}
-                    </button>
-                  ))}
+                      <Plus className="h-4 w-4" />
+                      {addMode ? "Add mode active" : "Add a bin"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-full border-slate-200 bg-white"
+                      onClick={handleGenerateRoute}
+                      disabled={routeLoading}
+                    >
+                      <Route className="h-4 w-4" />
+                      {routeLoading ? "Generating..." : "Generate route"}
+                    </Button>
+                  </div>
                 </div>
               </div>
+              {(routeError || routeStopsPreview.length > 0 || routeLoading) && (
+                <div className="rounded-2xl border border-slate-200 bg-white/80 px-3 py-2 text-xs text-slate-600">
+                  {routeError ? (
+                    <span className="text-rose-600">{routeError}</span>
+                  ) : routeLoading ? (
+                    <span>Simulating backend response and computing road route...</span>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-slate-900">
+                        Route {lastGeneratedRouteId ?? ""}
+                      </span>
+                      <span className="text-slate-400">|</span>
+                      <span>Order:</span>
+                      <span className="font-semibold text-slate-900">
+                        {routeStopsPreview.join(" -> ")}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="relative">
                 {addMode && (
                   <div className="absolute left-4 top-4 z-[1000] rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 shadow">
@@ -444,6 +685,8 @@ export default function SmartBinDashboard() {
                   addMode={addMode}
                   moveMode={moveMode}
                   selectedId={selectedId}
+                  routePath={routePath}
+                  routeStops={routeStopIds}
                   onAdd={handleAddBin}
                   onMove={handleMoveBin}
                   onSelect={handleSelectBin}
@@ -796,6 +1039,225 @@ export default function SmartBinDashboard() {
           </section>
         </div>
       </main>
+      <Dialog open={createDialogOpen} onOpenChange={handleCreateDialogChange}>
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Create a new smart bin</DialogTitle>
+            <DialogDescription>
+              Renseigne les donnees de base puis connecte l&apos;ESP32 en WiFi pour recuperer les
+              premieres infos capteur.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-5 lg:grid-cols-[1fr_1.1fr]">
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Placement map
+                </div>
+                <div className="mt-3 grid gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500">Bin ID (auto)</label>
+                    <Input value={nextBinIdPreview} readOnly className="rounded-xl bg-white" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">Latitude</label>
+                      <Input
+                        value={
+                          pendingAddCoords ? formatCoords(pendingAddCoords.lat) : "Not selected"
+                        }
+                        readOnly
+                        className="rounded-xl bg-white"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">Longitude</label>
+                      <Input
+                        value={
+                          pendingAddCoords ? formatCoords(pendingAddCoords.lng) : "Not selected"
+                        }
+                        readOnly
+                        className="rounded-xl bg-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-600">Area / Zone *</label>
+                  <Input
+                    value={createArea}
+                    onChange={(event) => {
+                      setCreateArea(event.target.value);
+                      setCreateFormError(null);
+                    }}
+                    placeholder="Ex: Eixample - Carrer de Mallorca"
+                    className="rounded-xl border-slate-200 bg-white"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-600">Last collection</label>
+                  <Input
+                    value={createLastCollection}
+                    onChange={(event) => setCreateLastCollection(event.target.value)}
+                    placeholder="new"
+                    className="rounded-xl border-slate-200 bg-white"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-600">Notes</label>
+                  <textarea
+                    rows={3}
+                    value={createNotes}
+                    onChange={(event) => setCreateNotes(event.target.value)}
+                    placeholder="Installation notes, area constraints, etc."
+                    className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 rounded-2xl border border-white/60 bg-white/80 p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">ESP32 WiFi setup</div>
+                  <div className="text-xs text-slate-500">
+                    Scan, selectionne un reseau ESP32, puis connecte-le.
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="rounded-full border-slate-200 bg-white"
+                  onClick={handleCreateWifiScan}
+                  disabled={createWifiScanning}
+                >
+                  {createWifiScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wifi className="h-4 w-4" />}
+                  {createWifiScanning ? "Scanning..." : "Scan WiFi"}
+                </Button>
+              </div>
+
+              {createWifiError && <div className="text-xs text-rose-600">{createWifiError}</div>}
+
+              <div className="space-y-2">
+                {createNetworks.length === 0 && !createWifiScanning ? (
+                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                    Aucun reseau detecte. Lance un scan pour trouver l&apos;ESP32.
+                  </div>
+                ) : (
+                  createNetworks.map((network) => {
+                    const isSelected = createSelectedNetworkId === network.id;
+                    const isLinked = createLinkedSsid === network.ssid;
+                    return (
+                      <button
+                        key={network.id}
+                        type="button"
+                        onClick={() => {
+                          setCreateSelectedNetworkId(network.id);
+                          setCreateFormError(null);
+                        }}
+                        className={cn(
+                          "w-full rounded-2xl border p-3 text-left transition",
+                          isLinked
+                            ? "border-emerald-200 bg-emerald-50"
+                            : isSelected
+                            ? "border-slate-400 bg-slate-50"
+                            : "border-slate-200 bg-white hover:border-slate-300"
+                        )}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <div className="font-semibold text-slate-900">{network.ssid}</div>
+                            <div className="text-[11px] text-slate-500">
+                              Ch {network.channel} · {network.distance} ·{" "}
+                              {network.secure ? "Secure" : "Open"}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+                            <span>{rssiToPercent(network.rssi)}%</span>
+                            {isLinked && <CheckCircle2 className="h-4 w-4 text-emerald-600" />}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs text-slate-600">
+                    {createLinkedSsid ? (
+                      <>
+                        <span className="font-semibold text-emerald-700">ESP32 linked:</span>{" "}
+                        {createLinkedSsid}
+                      </>
+                    ) : (
+                      "Aucun ESP32 connecte pour cette nouvelle bin."
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    className="rounded-full"
+                    onClick={handleCreateWifiConnect}
+                    disabled={!createSelectedNetwork || !!createWifiConnecting}
+                  >
+                    {createWifiConnecting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Connecting
+                      </>
+                    ) : (
+                      <>
+                        <Wifi className="h-4 w-4" />
+                        Connect & fetch
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <span className="text-slate-500">Initial fill</span>
+                    <div className="font-semibold text-slate-900">
+                      {createInitialFill !== null ? `${createInitialFill}%` : "Not fetched"}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <span className="text-slate-500">Last reading</span>
+                    <div className="font-semibold text-slate-900">{createLastReading}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {createFormError && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+              {createFormError}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              className="rounded-full border-slate-200 bg-white"
+              onClick={() => handleCreateDialogChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="rounded-full"
+              onClick={handleConfirmCreateBin}
+              disabled={!pendingAddCoords || !createArea.trim() || !createLinkedSsid}
+            >
+              Create bin
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
