@@ -139,10 +139,12 @@ export default function SmartBinDashboard() {
   const [createLastReading, setCreateLastReading] = useState("awaiting connection");
   const [createFormError, setCreateFormError] = useState<string | null>(null);
   const [routePath, setRoutePath] = useState<{ lat: number; lng: number }[]>([]);
-  const [routeStopIds, setRouteStopIds] = useState<string[]>([]);
+  const [routeStops, setRouteStops] = useState<RouteStopPayload[]>([]);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [lastGeneratedRouteId, setLastGeneratedRouteId] = useState<string | null>(null);
+  const [routeDispatching, setRouteDispatching] = useState(false);
+  const [routeDispatchStatus, setRouteDispatchStatus] = useState<string | null>(null);
 
   const filteredBins = useMemo(() => filterBins(bins, filter, query), [bins, filter, query]);
   const connectedBins = useMemo(
@@ -168,9 +170,8 @@ export default function SmartBinDashboard() {
   );
   const createSelectedNetwork =
     createNetworks.find((network) => network.id === createSelectedNetworkId) ?? null;
-  const routeStopsPreview = routeStopIds
-    .map((id) => bins.find((bin) => bin.id === id)?.id)
-    .filter(Boolean) as string[];
+  const routeStopsPreview = routeStops.map((stop) => stop.id);
+  const hasGeneratedRoute = routeStops.length > 0 && routePath.length > 1;
 
   const resetCreateBinDraft = () => {
     setCreateArea("");
@@ -268,7 +269,7 @@ export default function SmartBinDashboard() {
         setCreateSelectedNetworkId((prev) => prev ?? networks[0].id);
       }
     } catch (error) {
-      setCreateWifiError("Impossible de scanner les reseaux WiFi ESP32.");
+      setCreateWifiError("Unable to scan ESP32 WiFi networks.");
     } finally {
       setCreateWifiScanning(false);
     }
@@ -276,7 +277,7 @@ export default function SmartBinDashboard() {
 
   const handleCreateWifiConnect = async () => {
     if (!createSelectedNetwork) {
-      setCreateFormError("Selectionne un reseau ESP32 avant la connexion.");
+      setCreateFormError("Select an ESP32 network before connecting.");
       return;
     }
     setCreateWifiConnecting(createSelectedNetwork.ssid);
@@ -307,7 +308,7 @@ export default function SmartBinDashboard() {
       );
       setCreateLastReading(data?.lastReading ?? now);
     } catch (error) {
-      setCreateWifiError("Impossible de se connecter a l'ESP32 selectionne.");
+      setCreateWifiError("Unable to connect to the selected ESP32.");
     } finally {
       setCreateWifiConnecting(null);
     }
@@ -315,15 +316,15 @@ export default function SmartBinDashboard() {
 
   const handleConfirmCreateBin = () => {
     if (!pendingAddCoords) {
-      setCreateFormError("Position de la bin introuvable. Reclique sur la map.");
+      setCreateFormError("Bin position not found. Click again on the map.");
       return;
     }
     if (!createArea.trim()) {
-      setCreateFormError("Le champ Area / Zone est obligatoire.");
+      setCreateFormError("Area is required.");
       return;
     }
     if (!createLinkedSsid) {
-      setCreateFormError("Tu dois connecter un ESP32 en WiFi avant de creer la bin.");
+      setCreateFormError("You must connect an ESP32 over WiFi before creating the bin.");
       return;
     }
 
@@ -347,6 +348,7 @@ export default function SmartBinDashboard() {
   const handleGenerateRoute = async () => {
     setRouteLoading(true);
     setRouteError(null);
+    setRouteDispatchStatus(null);
     try {
       // Simulated backend response: ordered bins to visit + coordinates.
       const simulatedPayload = buildSimulatedRoutePayload();
@@ -385,14 +387,39 @@ export default function SmartBinDashboard() {
       }
 
       setRoutePath(path);
-      setRouteStopIds(simulatedPayload.orderedStops.map((stop) => stop.id));
+      setRouteStops(simulatedPayload.orderedStops);
       setLastGeneratedRouteId(simulatedPayload.routeId);
     } catch (error) {
-      setRouteError("Impossible de generer la route pour le moment.");
+      setRouteError("Unable to generate route right now.");
       setRoutePath([]);
-      setRouteStopIds([]);
+      setRouteStops([]);
     } finally {
       setRouteLoading(false);
+    }
+  };
+
+  const handleCancelRoute = () => {
+    setRoutePath([]);
+    setRouteStops([]);
+    setRouteError(null);
+    setLastGeneratedRouteId(null);
+    setRouteDispatchStatus(null);
+  };
+
+  const handleSendRouteToCollectionService = async () => {
+    if (!lastGeneratedRouteId || routeStops.length === 0) return;
+    setRouteDispatching(true);
+    setRouteDispatchStatus(null);
+    try {
+      // Simulated backend dispatch call
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      setRouteDispatchStatus(
+        `Mission sent to collection service for ${lastGeneratedRouteId}. Team is on the way.`
+      );
+    } catch (error) {
+      setRouteDispatchStatus("Unable to send mission to collection service.");
+    } finally {
+      setRouteDispatching(false);
     }
   };
 
@@ -637,13 +664,22 @@ export default function SmartBinDashboard() {
                     </Button>
                     <Button
                       size="sm"
-                      variant="outline"
-                      className="rounded-full border-slate-200 bg-white"
+                      variant={hasGeneratedRoute ? "default" : "outline"}
+                      className={cn(
+                        "rounded-full",
+                        hasGeneratedRoute
+                          ? "border border-amber-400 bg-white text-amber-500 hover:bg-amber-50"
+                          : "border-slate-200 bg-white"
+                      )}
                       onClick={handleGenerateRoute}
                       disabled={routeLoading}
                     >
                       <Route className="h-4 w-4" />
-                      {routeLoading ? "Generating..." : "Generate route"}
+                      {routeLoading
+                        ? "Generating..."
+                        : hasGeneratedRoute
+                        ? "Re-Generate route"
+                        : "Generate route"}
                     </Button>
                   </div>
                 </div>
@@ -655,15 +691,51 @@ export default function SmartBinDashboard() {
                   ) : routeLoading ? (
                     <span>Simulating backend response and computing road route...</span>
                   ) : (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold text-slate-900">
-                        Route {lastGeneratedRouteId ?? ""}
-                      </span>
-                      <span className="text-slate-400">|</span>
-                      <span>Order:</span>
-                      <span className="font-semibold text-slate-900">
-                        {routeStopsPreview.join(" -> ")}
-                      </span>
+                    <div className="space-y-2">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold text-slate-900">
+                              Route {lastGeneratedRouteId ?? ""}
+                            </span>
+                            <span className="text-slate-400">|</span>
+                            <span>Start:</span>
+                            <span className="font-semibold text-slate-900">
+                              {routeStopsPreview[0] ?? "-"}
+                            </span>
+                            <span className="text-slate-400">|</span>
+                            <span>End:</span>
+                            <span className="font-semibold text-slate-900">
+                              {routeStopsPreview[routeStopsPreview.length - 1] ?? "-"}
+                            </span>
+                            <span className="text-slate-400">|</span>
+                            <span>Order:</span>
+                          </div>
+                          <div className="font-semibold text-slate-900">{routeStopsPreview.join(" -> ")}</div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                          <Button
+                            size="sm"
+                            className="rounded-full bg-rose-500 text-white hover:bg-rose-600"
+                            onClick={handleCancelRoute}
+                          >
+                            Cancel route
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="rounded-full bg-emerald-500 text-white hover:bg-emerald-600"
+                            onClick={handleSendRouteToCollectionService}
+                            disabled={routeDispatching}
+                          >
+                            {routeDispatching ? "Sending..." : "Send to collection service"}
+                          </Button>
+                        </div>
+                      </div>
+                      {routeDispatchStatus && (
+                        <div className="text-[11px] font-semibold text-emerald-700">
+                          {routeDispatchStatus}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -686,7 +758,7 @@ export default function SmartBinDashboard() {
                   moveMode={moveMode}
                   selectedId={selectedId}
                   routePath={routePath}
-                  routeStops={routeStopIds}
+                  routeStops={routeStops}
                   onAdd={handleAddBin}
                   onMove={handleMoveBin}
                   onSelect={handleSelectBin}
@@ -1040,18 +1112,18 @@ export default function SmartBinDashboard() {
         </div>
       </main>
       <Dialog open={createDialogOpen} onOpenChange={handleCreateDialogChange}>
-        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto border border-slate-200 bg-white text-slate-900 shadow-2xl">
           <DialogHeader>
             <DialogTitle>Create a new smart bin</DialogTitle>
             <DialogDescription>
-              Renseigne les donnees de base puis connecte l&apos;ESP32 en WiFi pour recuperer les
-              premieres infos capteur.
+              Fill in the basic details, then connect the ESP32 over WiFi to fetch the first
+              sensor data.
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-5 lg:grid-cols-[1fr_1.1fr]">
             <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Placement map
                 </div>
@@ -1087,7 +1159,7 @@ export default function SmartBinDashboard() {
 
               <div className="space-y-3">
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-600">Area / Zone *</label>
+                  <label className="text-xs font-semibold text-slate-600">Area *</label>
                   <Input
                     value={createArea}
                     onChange={(event) => {
@@ -1120,12 +1192,12 @@ export default function SmartBinDashboard() {
               </div>
             </div>
 
-            <div className="space-y-4 rounded-2xl border border-white/60 bg-white/80 p-4 shadow-sm">
+            <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="text-sm font-semibold text-slate-900">ESP32 WiFi setup</div>
                   <div className="text-xs text-slate-500">
-                    Scan, selectionne un reseau ESP32, puis connecte-le.
+                    Scan, select an ESP32 network, then connect it.
                   </div>
                 </div>
                 <Button
@@ -1144,8 +1216,8 @@ export default function SmartBinDashboard() {
 
               <div className="space-y-2">
                 {createNetworks.length === 0 && !createWifiScanning ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
-                    Aucun reseau detecte. Lance un scan pour trouver l&apos;ESP32.
+                  <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-xs text-slate-500">
+                    No network detected yet. Run a scan to find the ESP32.
                   </div>
                 ) : (
                   createNetworks.map((network) => {
@@ -1187,7 +1259,7 @@ export default function SmartBinDashboard() {
                 )}
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+              <div className="rounded-2xl border border-slate-200 bg-white p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-xs text-slate-600">
                     {createLinkedSsid ? (
@@ -1196,12 +1268,13 @@ export default function SmartBinDashboard() {
                         {createLinkedSsid}
                       </>
                     ) : (
-                      "Aucun ESP32 connecte pour cette nouvelle bin."
+                      "No ESP32 connected for this new bin."
                     )}
                   </div>
                   <Button
                     size="sm"
-                    className="rounded-full"
+                    variant="outline"
+                    className="rounded-full border-slate-200 bg-white"
                     onClick={handleCreateWifiConnect}
                     disabled={!createSelectedNetwork || !!createWifiConnecting}
                   >
@@ -1249,7 +1322,8 @@ export default function SmartBinDashboard() {
               Cancel
             </Button>
             <Button
-              className="rounded-full"
+              variant="outline"
+              className="rounded-full border-slate-200 bg-white"
               onClick={handleConfirmCreateBin}
               disabled={!pendingAddCoords || !createArea.trim() || !createLinkedSsid}
             >

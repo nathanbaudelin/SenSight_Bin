@@ -1,7 +1,8 @@
 "use client";
 
+import { useEffect } from "react";
 import type { LatLngLiteral } from "leaflet";
-import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip, useMapEvents } from "react-leaflet";
+import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 
 import type { Bin, BinStatus } from "./bin-data";
 import { getBinStatus } from "./bin-data";
@@ -19,7 +20,7 @@ export type BinMapProps = {
   moveMode: boolean;
   selectedId: string | null;
   routePath?: LatLngLiteral[];
-  routeStops?: string[];
+  routeStops?: { id: string; lat: number; lng: number }[];
   onAdd: (coords: LatLngLiteral) => void;
   onMove: (coords: LatLngLiteral) => void;
   onSelect: (id: string) => void;
@@ -48,6 +49,17 @@ function MapClickHandler({ addMode, moveMode, onAdd, onMove }: MapClickHandlerPr
   return null;
 }
 
+function FitRouteBounds({ routePath }: { routePath?: LatLngLiteral[] }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!routePath || routePath.length < 2) return;
+    map.fitBounds(routePath, { padding: [36, 36] });
+  }, [map, routePath]);
+
+  return null;
+}
+
 export default function BinMap({
   bins,
   center,
@@ -60,6 +72,8 @@ export default function BinMap({
   onMove,
   onSelect,
 }: BinMapProps) {
+  const routeStopIds = new Set((routeStops ?? []).map((stop) => stop.id));
+
   return (
     <div className="h-[380px] w-full overflow-hidden rounded-3xl border border-white/40 bg-white/70 shadow-xl backdrop-blur md:h-[520px]">
       <MapContainer
@@ -72,23 +86,63 @@ export default function BinMap({
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+        <FitRouteBounds routePath={routePath} />
         <MapClickHandler addMode={addMode} moveMode={moveMode} onAdd={onAdd} onMove={onMove} />
         {routePath && routePath.length > 1 && (
-          <Polyline
-            positions={routePath}
-            pathOptions={{
-              color: "#0f172a",
-              weight: 5,
-              opacity: 0.8,
-              lineCap: "round",
-              lineJoin: "round",
-            }}
-          />
+          <>
+            <Polyline
+              positions={routePath}
+              interactive={false}
+              pathOptions={{
+                color: "#ffffff",
+                weight: 9,
+                opacity: 0.95,
+                lineCap: "round",
+                lineJoin: "round",
+              }}
+            />
+            <Polyline
+              positions={routePath}
+              interactive={false}
+              pathOptions={{
+                color: "#0f172a",
+                weight: 5,
+                opacity: 0.9,
+                dashArray: "10 8",
+                lineCap: "round",
+                lineJoin: "round",
+              }}
+            />
+          </>
         )}
+        {(routeStops ?? []).map((stop, index) => {
+          const isStart = index === 0;
+          const isEnd = index === (routeStops?.length ?? 1) - 1;
+          return (
+            <CircleMarker
+              key={`route-stop-${stop.id}-${index}`}
+              center={[stop.lat, stop.lng]}
+              radius={11}
+              interactive={false}
+              pathOptions={{
+                color: isStart ? "#16a34a" : isEnd ? "#dc2626" : "#0f172a",
+                weight: 2,
+                fillColor: "#ffffff",
+                fillOpacity: 1,
+              }}
+            >
+              <Tooltip permanent direction="top" offset={[0, -14]} opacity={1}>
+                <div className="text-[11px] font-semibold text-slate-900">
+                  {isStart ? "START" : isEnd ? "END" : `#${index + 1}`} {stop.id}
+                </div>
+              </Tooltip>
+            </CircleMarker>
+          );
+        })}
         {bins.map((bin) => {
           const status = getBinStatus(bin.fill);
           const isSelected = selectedId === bin.id;
-          const routeStopIndex = routeStops?.indexOf(bin.id) ?? -1;
+          const routeStopIndex = (routeStops ?? []).findIndex((stop) => stop.id === bin.id);
           const isRouteStop = routeStopIndex >= 0;
           return (
             <CircleMarker
@@ -97,7 +151,7 @@ export default function BinMap({
               radius={isRouteStop ? 14 : 12}
               pathOptions={{
                 color: isSelected ? "#0f172a" : "#ffffff",
-                weight: isSelected || isRouteStop ? 3 : 1,
+                weight: isSelected || routeStopIds.has(bin.id) ? 3 : 1,
                 fillColor: STATUS_COLORS[status],
                 fillOpacity: 0.9,
               }}
