@@ -56,7 +56,6 @@ function FitRouteBounds({ routePath }: { routePath?: LatLngLiteral[] }) {
     if (!routePath || routePath.length < 2) return;
     const bounds: [number, number][] = routePath.map(p => [p.lat, p.lng]);
     map.fitBounds(bounds, { padding: [36, 36] });
-    // map.fitBounds(routePath, { padding: [36, 36] });
   }, [map, routePath]);
 
   return null;
