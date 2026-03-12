@@ -7,6 +7,10 @@ import { BinDto } from './dtos/response-bin.dto';
 import { plainToInstance } from 'class-transformer';
 import { CounterService } from 'src/counter/counter.service';
 import { Location } from 'src/tools/tools';
+import { MeasurementCreateDto } from 'src/measurements/dtos/create-measurement.dto';
+import { Measurement } from 'src/measurements/measurement.schema';
+import { ApiException } from 'src/tools/api.exception';
+import { BinUpdateDto } from './dtos/update-bin.dto';
 
 @Injectable()
 export class BinService {
@@ -30,39 +34,40 @@ export class BinService {
     return res;
   }
 
-  // async findAll(): Promise<Bin[]> {
-  //   return this.binModel.find().exec();
-  // }
+  async registerMeasurement(
+    binId: string,
+    measurement: MeasurementCreateDto,
+  ): Promise<Measurement> {
+    const bin = await this.binModel.findOne({ id: binId }).exec();
 
-  // async findOne(bin_id: string): Promise<Bin> {
-  //   const bin = await this.binModel.findOne({ bin_id }).exec();
+    if (!bin) throw new ApiException('bin.not_found', 404, { binId });
 
-  //   if (!bin) {
-  //     throw new NotFoundException(`Bin ${bin_id} not found`);
-  //   }
+    const res: Measurement = {
+      bin_id: binId,
+      filling_level: 100 - (measurement.filling_level * 100) / bin.depth,
+      battery_level: measurement.battery_level,
+    };
 
-  //   return bin;
-  // }
+    await this.update(binId, {
+      filling_level: res.filling_level,
+      battery_level: res.battery_level,
+    });
 
-  // async update(bin_id: string, updateData: Partial<Bin>): Promise<Bin> {
-  //   const updated = await this.binModel.findOneAndUpdate(
-  //     { bin_id },
-  //     updateData,
-  //     { new: true },
-  //   );
+    return res;
+  }
 
-  //   if (!updated) {
-  //     throw new NotFoundException(`Bin ${bin_id} not found`);
-  //   }
+  async update(binId: string, updateData: BinUpdateDto): Promise<BinDto> {
+    const updated = await this.binModel.findOneAndUpdate(
+      { id: binId },
+      updateData,
+      { returnDocument: 'after' },
+    );
 
-  //   return updated;
-  // }
+    if (!updated) throw new ApiException('bin.not_found', 404, { binId });
 
-  // async delete(bin_id: string): Promise<void> {
-  //   const result = await this.binModel.deleteOne({ bin_id });
+    const res = plainToInstance(BinDto, updated.toObject());
+    if (res.location) res.location = plainToInstance(Location, res.location);
 
-  //   if (result.deletedCount === 0) {
-  //     throw new NotFoundException(`Bin ${bin_id} not found`);
-  //   }
-  // }
+    return res;
+  }
 }
