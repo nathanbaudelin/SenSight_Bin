@@ -1,6 +1,6 @@
-# SmartBin
+# SenSight Bin
 
-SmartBin is a **smart bin project** combining IoT, a backend, AI, and a web interface to optimize waste collection routes.
+SenSight Bin is a **smart bin project** combining IoT, a backend, AI, and a web interface to optimize waste collection routes.
 
 The project includes:
 
@@ -182,4 +182,4 @@ Password: ...
 - Test backend & AI via curl or browser  
 - Monitor DB via **Mongo Express**  
 
-This setup ensures you can **develop and test SmartBin quickly**.
+This setup ensures you can **develop and test SenSight Bin quickly**.
