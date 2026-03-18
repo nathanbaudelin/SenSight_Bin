@@ -28,7 +28,12 @@ import {
 
 @Controller('measurements')
 @ApiTags('Measurements')
-@ApiExtraModels(ResponseSwaggerDto, MeasurementDto, MeasurementQuerySwaggerDto)
+@ApiExtraModels(
+  ResponseSwaggerDto,
+  PaginatedContentSwaggerDto,
+  MeasurementDto,
+  MeasurementQuerySwaggerDto,
+)
 @UseInterceptors(ResponseInterceptor)
 export class MeasurementController {
   constructor(private readonly measurementService: MeasurementService) {}

@@ -44,6 +44,7 @@ import { Location } from 'src/tools/tools';
 @ApiTags('Bins')
 @ApiExtraModels(
   ResponseSwaggerDto,
+  PaginatedContentSwaggerDto,
   Location,
   BinDto,
   BinQuerySwaggerDto,
