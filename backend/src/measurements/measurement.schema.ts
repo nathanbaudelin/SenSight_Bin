@@ -21,3 +21,4 @@ export const MeasurementSchema = SchemaFactory.createForClass(Measurement);
 
 // Indexes
 MeasurementSchema.index({ bin_id: 1, timestamp: -1 });
+MeasurementSchema.index({ bin_id: 1, createdAt: -1 });

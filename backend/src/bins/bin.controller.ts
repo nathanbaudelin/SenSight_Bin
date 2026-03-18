@@ -166,4 +166,22 @@ export class BinController {
     );
     return await this.measurementService.create(measurement);
   }
+
+  @Get('/:id/measurements')
+  @ApiOperation({ summary: 'Get all measurements of the bin.' })
+  @ApiOkResponse({
+    description: 'Measurements found',
+    ...responseWithOptionalData(
+      ResponseSwaggerDto,
+      MeasurementDto,
+      PaginatedContentSwaggerDto,
+    ),
+  })
+  @HttpCode(200)
+  async getBinMeasurements(
+    @Param('id') binId: string,
+  ): Promise<PaginatedContentDto<MeasurementDto>> {
+    await this.binService.findOneId(binId);
+    return await this.measurementService.findAll({}, binId);
+  }
 }
