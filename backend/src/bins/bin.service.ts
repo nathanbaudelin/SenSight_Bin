@@ -11,6 +11,8 @@ import { MeasurementCreateDto } from 'src/measurements/dtos/create-measurement.d
 import { Measurement } from 'src/measurements/measurement.schema';
 import { ApiException } from 'src/tools/api.exception';
 import { BinUpdateDto } from './dtos/update-bin.dto';
+import { PaginatedContentDto } from 'src/tools/pagination.dto';
+import { BinQueryDto } from './dtos/query-bin.dto';
 
 @Injectable()
 export class BinService {
@@ -34,6 +36,62 @@ export class BinService {
     return res;
   }
 
+  async findAll({
+    page = 1,
+    limit = 10,
+    type,
+    status,
+  }: BinQueryDto = {}): Promise<PaginatedContentDto<BinDto>> {
+    let filter = {};
+
+    if (type) filter = { ...filter, type: type };
+    if (status) filter = { ...filter, status: status };
+
+    const skip = (page - 1) * limit;
+
+    const [bins, total] = await Promise.all([
+      this.binModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      this.binModel.countDocuments(filter),
+    ]);
+
+    const res = bins.map((bin) => plainToInstance(BinDto, bin.toObject()));
+
+    return {
+      data: res,
+      total,
+      page,
+      lastPage: Math.ceil(total / limit),
+    };
+  }
+
+  async findOneId(binId: string): Promise<BinDto> {
+    const existingBin = await this.binModel.findOne({ id: binId });
+
+    if (!existingBin)
+      throw new ApiException('bin.not_found', 404, { provided: binId });
+
+    return plainToInstance(BinDto, existingBin.toObject());
+  }
+
+  async update(binId: string, updateData: BinUpdateDto): Promise<BinDto> {
+    const updated = await this.binModel.findOneAndUpdate(
+      { id: binId },
+      updateData,
+      { returnDocument: 'after' },
+    );
+
+    if (!updated) throw new ApiException('bin.not_found', 404, { binId });
+
+    const res = plainToInstance(BinDto, updated.toObject());
+    if (res.location) res.location = plainToInstance(Location, res.location);
+
+    return res;
+  }
+
   async registerMeasurement(
     binId: string,
     measurement: MeasurementCreateDto,
@@ -52,21 +110,6 @@ export class BinService {
       filling_level: res.filling_level,
       battery_level: res.battery_level,
     });
-
-    return res;
-  }
-
-  async update(binId: string, updateData: BinUpdateDto): Promise<BinDto> {
-    const updated = await this.binModel.findOneAndUpdate(
-      { id: binId },
-      updateData,
-      { returnDocument: 'after' },
-    );
-
-    if (!updated) throw new ApiException('bin.not_found', 404, { binId });
-
-    const res = plainToInstance(BinDto, updated.toObject());
-    if (res.location) res.location = plainToInstance(Location, res.location);
 
     return res;
   }

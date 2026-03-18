@@ -1,9 +1,13 @@
 import {
   Body,
   Controller,
+  Delete,
+  Get,
   HttpCode,
   Param,
+  Patch,
   Post,
+  Query,
   UseInterceptors,
 } from '@nestjs/common';
 import {
@@ -11,7 +15,10 @@ import {
   ApiBody,
   ApiCreatedResponse,
   ApiExtraModels,
+  ApiNotFoundResponse,
+  ApiOkResponse,
   ApiOperation,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { BinCreateDto } from './dtos/create-bin.dto';
@@ -24,15 +31,25 @@ import { MeasurementCreateDto } from 'src/measurements/dtos/create-measurement.d
 import { MeasurementDto } from 'src/measurements/dtos/response-measurement.dto';
 import { MeasurementService } from 'src/measurements/measurement.service';
 import { Measurement } from 'src/measurements/measurement.schema';
+import { BinUpdateDto } from './dtos/update-bin.dto';
+import { BinStatus } from 'src/tools/enums';
+import { BinQueryDto, BinQuerySwaggerDto } from './dtos/query-bin.dto';
+import {
+  PaginatedContentDto,
+  PaginatedContentSwaggerDto,
+} from 'src/tools/pagination.dto';
+import { Location } from 'src/tools/tools';
 
 @Controller('bins')
 @ApiTags('Bins')
 @ApiExtraModels(
   ResponseSwaggerDto,
-  BinCreateDto,
+  Location,
   BinDto,
-  MeasurementCreateDto,
+  BinCreateDto,
+  BinUpdateDto,
   MeasurementDto,
+  MeasurementCreateDto,
 )
 @UseInterceptors(ResponseInterceptor)
 export class BinController {
@@ -55,6 +72,76 @@ export class BinController {
   @HttpCode(201)
   async createBin(@Body() newBin: BinCreateDto): Promise<BinDto> {
     return await this.binService.create(newBin);
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'Get all bins.' })
+  @ApiQuery({ type: BinQuerySwaggerDto })
+  @ApiOkResponse({
+    description: 'Bins found',
+    ...responseWithOptionalData(
+      ResponseSwaggerDto,
+      BinDto,
+      PaginatedContentSwaggerDto,
+    ),
+  })
+  @HttpCode(200)
+  async getBins(
+    @Query() query?: BinQueryDto,
+  ): Promise<PaginatedContentDto<BinDto>> {
+    return await this.binService.findAll(query);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get one bin by id.' })
+  @ApiOkResponse({
+    description: 'Bin found',
+    ...responseWithOptionalData(ResponseSwaggerDto, BinDto),
+  })
+  @ApiNotFoundResponse({
+    description: 'Id not found.',
+    ...responseWithOptionalData(ResponseSwaggerDto),
+  })
+  @HttpCode(200)
+  async getOneBinById(
+    @Param('id')
+    id: string,
+  ): Promise<BinDto> {
+    return await this.binService.findOneId(id);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update one bin by id.' })
+  @ApiBody({ type: BinUpdateDto })
+  @ApiOkResponse({
+    description: 'Bin updated',
+    ...responseWithOptionalData(ResponseSwaggerDto),
+  })
+  @ApiNotFoundResponse({
+    description: 'Id not found.',
+    ...responseWithOptionalData(ResponseSwaggerDto),
+  })
+  @HttpCode(200)
+  async patchOneArtworkById(
+    @Param('id') id: string,
+    @Body() newArtwork: BinUpdateDto,
+  ): Promise<void> {
+    await this.binService.update(id, newArtwork);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Delete one bin by id.' })
+  @ApiOkResponse({
+    description: 'Artwork deleted',
+    ...responseWithOptionalData(ResponseSwaggerDto),
+  })
+  @ApiNotFoundResponse({
+    description: 'Id not found.',
+    ...responseWithOptionalData(ResponseSwaggerDto),
+  })
+  @HttpCode(200)
+  async deleteOneArtworkById(@Param('id') id: string): Promise<void> {
+    await this.binService.update(id, { status: BinStatus.REMOVED });
   }
 
   @Post('/:id/measurements')
