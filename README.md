@@ -165,13 +165,13 @@ Password: ...
 
 ## 7. Quick Ports Summary
 
-| Service | Localhost (dev) | Docker |
-|---------|----------------|--------|
-| Backend | 3000           | 3000   |
-| AI      | 8001           | 8000   |
-| MongoDB | 27017          | 27017  |
-| Mongo Express | 8081      | 8081  |
-| Frontend | depends | depends |
+| Service       | Localhost (dev)     | Docker |
+|---------------|---------------------|--------|
+| Backend       | depend of your .env | 3000   |
+| AI            | depend of your .env | 8000   |
+| MongoDB       | -                   | 27017  |
+| Mongo Express | -                   | 8081   |
+| Frontend      | depend of your .env | 3001   |
 
 ---
 
