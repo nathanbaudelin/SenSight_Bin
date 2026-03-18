@@ -124,17 +124,17 @@ export class BinController {
     ...responseWithOptionalData(ResponseSwaggerDto),
   })
   @HttpCode(200)
-  async patchOneArtworkById(
+  async patchOneBinById(
     @Param('id') id: string,
-    @Body() newArtwork: BinUpdateDto,
+    @Body() newBin: BinUpdateDto,
   ): Promise<void> {
-    await this.binService.update(id, newArtwork);
+    await this.binService.update(id, newBin);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete one bin by id.' })
   @ApiOkResponse({
-    description: 'Artwork deleted',
+    description: 'Bin deleted',
     ...responseWithOptionalData(ResponseSwaggerDto),
   })
   @ApiNotFoundResponse({
@@ -142,7 +142,7 @@ export class BinController {
     ...responseWithOptionalData(ResponseSwaggerDto),
   })
   @HttpCode(200)
-  async deleteOneArtworkById(@Param('id') id: string): Promise<void> {
+  async deleteOneBinById(@Param('id') id: string): Promise<void> {
     await this.binService.update(id, { status: BinStatus.REMOVED });
   }
 
