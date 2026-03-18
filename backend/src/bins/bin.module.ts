@@ -14,5 +14,6 @@ import { MeasurementModule } from 'src/measurements/measurement.module';
   ],
   controllers: [BinController],
   providers: [BinService],
+  exports: [BinService],
 })
 export class BinModule {}
