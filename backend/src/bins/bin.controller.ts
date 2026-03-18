@@ -46,6 +46,7 @@ import { Location } from 'src/tools/tools';
   ResponseSwaggerDto,
   Location,
   BinDto,
+  BinQuerySwaggerDto,
   BinCreateDto,
   BinUpdateDto,
   MeasurementDto,
