@@ -13,6 +13,7 @@ import { ApiException } from 'src/tools/api.exception';
 import { BinUpdateDto } from './dtos/update-bin.dto';
 import { PaginatedContentDto } from 'src/tools/pagination.dto';
 import { BinQueryDto } from './dtos/query-bin.dto';
+import { BinStatus } from 'src/tools/enums';
 
 @Injectable()
 export class BinService {
@@ -45,7 +46,11 @@ export class BinService {
     let filter = {};
 
     if (type) filter = { ...filter, type: type };
-    if (status) filter = { ...filter, status: status };
+    if (status) {
+      filter = { ...filter, status: status };
+    } else {
+      filter = { ...filter, status: { $ne: BinStatus.REMOVED } };
+    }
 
     const skip = (page - 1) * limit;
 
