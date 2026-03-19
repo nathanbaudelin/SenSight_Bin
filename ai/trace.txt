@@ -1,0 +1,32 @@
+AI Technical Choice Synthesis
+
+1. Model Architecture: Sequence-to-Sequence LSTM
+-Choice: A Long Short-Term Memory (LSTM) neural network with a Sequence-to-Sequence (Seq2Seq) structure.
+-Justification: LSTMs are specialized for Time-Series Forecasting because they have a memory that allows them to capture long-term dependencies in data.
+    In waste management, current fill levels are heavily dependent on patterns from previous days (e.g., weekend buildup), which a standard neural network would ignore.
+
+2. Input/Output Strategy: 168-Hour Window
+-Choice: Input of 168 hours (1 week) of history to predict an output of 168 hours (1 week) into the future.
+-Justification: A 7-day window ensures the AI captures the full weekly cycle of city life, specifically identifying spikes on specific nights.
+-Operational Utility: A 1-week forecast allows municipalities to plan truck maintenance and crew schedules in advance, rather than reacting to overflows.
+
+3. Data Engineering & Feature Selection
+-Choice: Multi-feature input including Fill Level (%), Day of Week, and Hour of Day.
+-Justification: Waste generation is not random; it is human-driven. By feeding the AI the time and day, we enable it to learn that a 10% increase on a Monday morning is different from a 10% increase during a tourist festival in Barcelona.
+
+4. Loss Function: Mean Squared Error (MSE)
+-Choice: Using MSE as the loss function and MAE for human-readable accuracy.
+-Justification: MSE squares the error, meaning it penalizes large misses much more than small misses.
+    In our business case, predicting 70% when a bin as actually 100% (an overflow) is a critical service failure. MSE forces the model to prioritize avoiding these large, high-risk discrepancies.
+
+5. Deployment & Performance: Python/FastAPI Worker
+-Choice: Standalone FastAPI inference service.
+-Justification:  Accuracy: This architecture achieved a 94.2% accuracy (MAE 0.0580), exceeding the 87% target in the business plan.
+-Decoupling: By separating the AI worker from the NestJS backend, the system remains scalable. If we deploy to 10 cities, we can scale the AI worker independently to handle the increased load without slowing down the main dashboard.
+
+
+
+- to do :
+re-training script to adapt in time
+for inference : faire une route qui ptrend l'id d'une poubelle, fait l'inférence sur ses données et renvoie la prédiction sur 1 semaine
+patch les script pour qu'ils soient en fonctions
