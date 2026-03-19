@@ -1,6 +1,6 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import { IsEnum, IsString } from 'class-validator';
-import { AlertStatus, AlertType } from 'src/tools/enums';
+import { AlertType } from 'src/tools/enums';
 
 export class AlertCreateDto {
   @IsString()
@@ -36,17 +36,4 @@ export class AlertCreateDto {
     ],
   })
   message: string;
-
-  @IsEnum(AlertStatus)
-  @ApiPropertyOptional({
-    description: 'Alert status',
-    enum: AlertStatus,
-    example: AlertStatus.OPEN,
-    examples: [
-      AlertStatus.OPEN,
-      AlertStatus.ACKNOWLEDGED,
-      AlertStatus.RESOLVED,
-    ],
-  })
-  status?: AlertStatus;
 }
