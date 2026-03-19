@@ -27,7 +27,7 @@ export class MeasurementService {
   }
 
   async findAll(
-    { page = 1, limit = 100, binType }: MeasurementQueryDto = {},
+    { page = 1, limit = 100, binType, days }: MeasurementQueryDto = {},
     binId?: string,
   ): Promise<PaginatedContentDto<MeasurementDto>> {
     const skip = (page - 1) * limit;
@@ -35,6 +35,13 @@ export class MeasurementService {
 
     if (binId) {
       match = { ...match, bin_id: binId };
+    }
+
+    if (days !== undefined) {
+      const fromDate = new Date();
+      fromDate.setDate(fromDate.getDate() - days);
+
+      match = { ...match, timestamp: { $gte: fromDate } };
     }
 
     const aggregationPipeline: any[] = [];
