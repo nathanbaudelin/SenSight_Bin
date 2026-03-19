@@ -23,3 +23,9 @@ AI Technical Choice Synthesis
 -Choice: Standalone FastAPI inference service.
 -Justification:  Accuracy: This architecture achieved a 94.2% accuracy (MAE 0.0580), exceeding the 87% target in the business plan.
 -Decoupling: By separating the AI worker from the NestJS backend, the system remains scalable. If we deploy to 10 cities, we can scale the AI worker independently to handle the increased load without slowing down the main dashboard.
+
+
+
+- to do :
+re-training script to adapt in time
+for inference : faire une route qui ptrend l'id d'une poubelle, fait l'inférence sur ses données et renvoie la prédiction sur 1 semaine 
