@@ -20,7 +20,7 @@ export default function SmartNav() {
             <Recycle className="h-6 w-6" />
           </div>
           <div>
-            <div className="text-lg font-semibold text-slate-900">Smart Waste IoT</div>
+            <div className="text-lg font-semibold text-slate-900">SenSight Bin</div>
             <div className="text-xs text-slate-500">Barcelona City Ops</div>
           </div>
         </a>

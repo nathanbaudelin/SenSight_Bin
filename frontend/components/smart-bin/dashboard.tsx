@@ -549,7 +549,7 @@ export default function SmartBinDashboard() {
                   Active coverage - Barcelona
                 </div>
                 <h1 className="text-4xl font-semibold tracking-tight text-slate-900 md:text-5xl">
-                  Smart Waste Control Center
+                  SenSight Bin Control Center
                 </h1>
                 <p className="max-w-xl text-base text-slate-600 md:text-lg">
                   IoT prototype for connected smart bins. Track fill levels, plan collections, and

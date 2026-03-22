@@ -16,11 +16,11 @@ const displayFont = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "Smart Waste IoT - Barcelona",
+  title: "SenSight Bin - Barcelona",
   description:
     "Dashboard for connected smart bins, ESP32 sensors, and optimized collection routes.",
   keywords: [
-    "Smart Waste",
+    "SenSight Bin",
     "Smart Bin",
     "IoT",
     "ESP32",
@@ -31,9 +31,9 @@ export const metadata: Metadata = {
   ],
   openGraph: {
     type: "website",
-    siteName: "Smart Waste IoT",
+    siteName: "SenSight Bin",
     locale: "en_US",
-    title: "Smart Waste IoT - Barcelona",
+    title: "SenSight Bin - Barcelona",
     description:
       "Real-time monitoring of connected bins, fill levels, and optimized collection routes.",
   },
