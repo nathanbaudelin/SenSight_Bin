@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Bell,
   CalendarDays,
@@ -10,7 +11,6 @@ import {
   Clock3,
   ClipboardX,
   Loader2,
-  MapPinned,
   MousePointerClick,
   Move,
   Plus,
@@ -124,7 +124,7 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "medium", label: "Medium 50-80%" },
   { key: "low", label: "Low < 50%" },
 ];
-const ALERT_FETCH_LIMIT = 100
+const ALERT_FETCH_LIMIT = 100;
 const ALERT_LIST_FILTER_OPTIONS: { value: AlertListFilter; label: string }[] = [
   { value: "open", label: "Open" },
   { value: "seen", label: "Seen" },
@@ -248,11 +248,11 @@ const toNumberOrNull = (rawValue: string) => {
 };
 
 const getAlertCardToneClass = (alert: BackendAlert) => {
-  if (alert.status === "resolved") return "border-slate-200 bg-slate-50 text-slate-700";
+  if (alert.status === "resolved") return "border-l-slate-300 bg-slate-50/60 text-slate-700";
   if (alert.type === "overflow" || alert.type === "sensor_failure") {
-    return "border-rose-200 bg-rose-50/70 text-rose-700";
+    return "border-l-rose-400 bg-rose-50/65 text-rose-700";
   }
-  return "border-amber-200 bg-amber-50/70 text-amber-700";
+  return "border-l-amber-400 bg-amber-50/55 text-amber-700";
 };
 
 const formatAlertTimeAgo = (rawTimestamp: string) => {
@@ -270,6 +270,11 @@ const formatAlertTimeAgo = (rawTimestamp: string) => {
 
   const diffDays = Math.floor(diffHours / 24);
   return `${diffDays} d ago`;
+};
+
+const sectionReveal = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
 };
 
 const filterBins = (bins: Bin[], filter: FilterKey, query: string) => {
@@ -953,16 +958,10 @@ export default function SmartBinDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f7f4ef] text-slate-900">
+    <div className="min-h-screen bg-white text-slate-900">
       <SmartNav />
-      <main className="relative overflow-hidden">
-        <div className="pointer-events-none absolute inset-0">
-          <div className="absolute -left-40 top-[-180px] h-[420px] w-[420px] rounded-full bg-emerald-200/50 blur-[120px]" />
-          <div className="absolute right-[-120px] top-[120px] h-[360px] w-[360px] rounded-full bg-amber-200/50 blur-[120px]" />
-          <div className="absolute bottom-[-200px] left-[30%] h-[420px] w-[420px] rounded-full bg-sky-200/40 blur-[140px]" />
-        </div>
-
-        <div className="relative mx-auto flex max-w-7xl flex-col gap-10 px-6 pb-20 pt-10">
+      <main>
+        <div className="mx-auto flex max-w-7xl flex-col gap-9 px-6 pb-20 pt-8">
           {(binsError || mutationError) && (
             <div className="space-y-2">
               {binsError && (
@@ -978,110 +977,108 @@ export default function SmartBinDashboard() {
             </div>
           )}
 
-          <section id="overview" className="space-y-4 scroll-mt-28">
-            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)] lg:items-start">
-              <div className="space-y-4">
-                <div className="inline-flex w-fit max-w-full items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                  <MapPinned className="h-3.5 w-3.5" />
-                  Active coverage - Barcelona
-                </div>
-                <h1 className="text-4xl font-semibold tracking-tight text-slate-900 md:text-5xl">
+          <section id="overview" className="scroll-mt-28 border-b border-[var(--ops-divider)] pb-6">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+              <div className="space-y-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--ops-muted)]">
+                  Barcelona city operations
+                </p>
+                <h1 className="text-3xl font-semibold tracking-tight text-slate-950 md:text-4xl">
                   SenSight Bin Control Center
                 </h1>
-                <p className="max-w-xl text-base text-slate-600 md:text-lg">
-                  IoT prototype for connected smart bins. Track fill levels, manage statuses, and
-                  configure bins directly from the map.
+                <p className="max-w-2xl text-sm text-slate-600 md:text-base">
+                  KPIs, map routing and alerts in one operational workspace.
                 </p>
               </div>
 
-              <div className="w-full rounded-3xl border border-white/50 bg-white/70 p-5 shadow-lg backdrop-blur lg:max-w-sm lg:justify-self-end">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm text-slate-500">Active bins</div>
-                    <div className="text-2xl font-semibold">{connectedBins}</div>
-                  </div>
-                  <div className="rounded-2xl bg-emerald-500/10 p-2.5 text-emerald-600">
-                    <TrendingUp className="h-5 w-5" />
-                  </div>
+              <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2 lg:min-w-[24rem]">
+                <div className="flex items-center justify-between gap-3 border-b border-[var(--ops-divider)] pb-2 sm:col-span-2">
+                  <span className="uppercase tracking-[0.12em] text-[var(--ops-muted)]">Latest sync</span>
+                  <span className="font-semibold text-slate-900">{latestReading}</span>
                 </div>
-                <div className="mt-3 space-y-2.5 text-sm text-slate-600">
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Latest sensor sync</span>
-                    <span className="font-semibold text-slate-900">{latestReading}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Unverified bins</span>
-                    <span className="font-semibold text-slate-900">{unverifiedBins.length}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span>API refresh</span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 rounded-full border-slate-200 bg-white px-3 text-xs"
-                      onClick={() => void loadBins(true)}
-                      disabled={binsRefreshing}
-                    >
-                      {binsRefreshing ? (
-                        <>
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          Refreshing
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCcw className="h-3.5 w-3.5" />
-                          Refresh
-                        </>
-                      )}
-                    </Button>
-                  </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="uppercase tracking-[0.12em] text-[var(--ops-muted)]">Active bins</span>
+                  <span className="font-semibold text-slate-900">{connectedBins}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="uppercase tracking-[0.12em] text-[var(--ops-muted)]">Unverified</span>
+                  <span className="font-semibold text-slate-900">{unverifiedBins.length}</span>
+                </div>
+                <div className="sm:col-span-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 rounded-full border-[var(--ops-divider-strong)] bg-white px-3 text-xs text-slate-700 hover:border-[var(--ops-accent)] hover:text-[var(--ops-accent)]"
+                    onClick={() => void loadBins(true)}
+                    disabled={binsRefreshing}
+                  >
+                    {binsRefreshing ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Syncing
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCcw className="h-3.5 w-3.5" />
+                        Refresh data
+                      </>
+                    )}
+                  </Button>
                 </div>
               </div>
             </div>
           </section>
 
-          <section id="stats" className="grid gap-6 scroll-mt-28 md:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-3xl border border-white/60 bg-white/80 p-6 shadow-lg backdrop-blur">
-              <div className="text-sm text-slate-500">Total bins</div>
-              <div className="mt-4 text-3xl font-semibold">{bins.length}</div>
-              <div className="mt-2 flex items-center gap-2 text-xs text-emerald-600">
-                <TrendingUp className="h-3.5 w-3.5" />
-                Live from backend
+          <motion.section
+            id="stats"
+            className="scroll-mt-28 border-b border-[var(--ops-divider)] pb-5"
+            initial={sectionReveal.initial}
+            animate={sectionReveal.animate}
+            transition={{ duration: 0.26, ease: "easeOut", delay: 0.03 }}
+          >
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-[var(--ops-divider)]">
+              <div className="space-y-1 lg:pr-5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--ops-muted)]">Total bins</p>
+                <p className="text-3xl font-semibold tracking-tight text-slate-950">{bins.length}</p>
+                <p className="text-xs text-slate-500">All indexed bins</p>
+              </div>
+              <div className="space-y-1 lg:px-5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--ops-muted)]">Needs pickup</p>
+                <p className="text-3xl font-semibold tracking-tight text-slate-950">{needsCollection}</p>
+                <p className="flex items-center gap-1.5 text-xs text-rose-600">
+                  <TrendingUp className="h-3.5 w-3.5" />
+                  Fill above 80%
+                </p>
+              </div>
+              <div className="space-y-1 lg:px-5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--ops-muted)]">Average fill</p>
+                <p className="text-3xl font-semibold tracking-tight text-slate-950">{averageFill}%</p>
+                <p className="flex items-center gap-1.5 text-xs text-[var(--ops-accent)]">
+                  <TrendingDown className="h-3.5 w-3.5" />
+                  Live network trend
+                </p>
+              </div>
+              <div className="space-y-1 lg:pl-5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--ops-muted)]">Unverified</p>
+                <p className="text-3xl font-semibold tracking-tight text-slate-950">{unverifiedBins.length}</p>
+                <p className="text-xs text-amber-700">Pending map configuration</p>
               </div>
             </div>
-            <div className="rounded-3xl border border-white/60 bg-white/80 p-6 shadow-lg backdrop-blur">
-              <div className="text-sm text-slate-500">Needs pickup</div>
-              <div className="mt-4 text-3xl font-semibold">{needsCollection}</div>
-              <div className="mt-2 flex items-center gap-2 text-xs text-rose-600">
-                <TrendingUp className="h-3.5 w-3.5" />
-                Fill level above 80%
-              </div>
-            </div>
-            <div className="rounded-3xl border border-white/60 bg-white/80 p-6 shadow-lg backdrop-blur">
-              <div className="text-sm text-slate-500">Average fill</div>
-              <div className="mt-4 text-3xl font-semibold">{averageFill}%</div>
-              <div className="mt-2 flex items-center gap-2 text-xs text-emerald-600">
-                <TrendingDown className="h-3.5 w-3.5" />
-                All statuses included
-              </div>
-            </div>
-            <div className="rounded-3xl border border-white/60 bg-white/80 p-6 shadow-lg backdrop-blur">
-              <div className="text-sm text-slate-500">Unverified</div>
-              <div className="mt-4 text-3xl font-semibold">{unverifiedBins.length}</div>
-              <div className="mt-2 flex items-center gap-2 text-xs text-amber-600">
-                <TrendingUp className="h-3.5 w-3.5" />
-                Pending map setup
-              </div>
-            </div>
-          </section>
+          </motion.section>
 
-          <section id="map" className="grid gap-6 scroll-mt-28 lg:grid-cols-[2.2fr_1fr]">
-            <div className="space-y-4">
-              <div className="space-y-3">
+          <motion.section
+            id="map"
+            className="grid gap-6 scroll-mt-28 lg:grid-cols-[minmax(0,1fr)_22rem]"
+            initial={sectionReveal.initial}
+            animate={sectionReveal.animate}
+            transition={{ duration: 0.28, ease: "easeOut", delay: 0.08 }}
+          >
+            <div className="space-y-4 border-b border-[var(--ops-divider)] pb-6 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-6">
+              <div className="space-y-3 border-b border-[var(--ops-divider)] pb-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h2 className="text-xl font-semibold">Bin map</h2>
-                    <p className="text-sm text-slate-500">Click a bin to view and edit details.</p>
+                    <h2 className="text-xl font-semibold tracking-tight text-slate-950">Map</h2>
+                    <p className="text-sm text-slate-600">Live bin status and collection routing.</p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1092,8 +1089,9 @@ export default function SmartBinDashboard() {
                         type="button"
                         onClick={() => setFilter(item.key)}
                         className={cn(
-                          "rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition",
-                          filter === item.key && "border-slate-900 bg-slate-900 text-white"
+                          "rounded-full border border-[var(--ops-divider-strong)] bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition",
+                          filter === item.key &&
+                            "border-[var(--ops-accent)] bg-[color:rgba(0,184,124,0.08)] text-[var(--ops-accent)]"
                         )}
                       >
                         {item.label}
@@ -1102,7 +1100,7 @@ export default function SmartBinDashboard() {
                     <select
                       value={mapTypeFilter}
                       onChange={(event) => setMapTypeFilter(event.target.value as MapTypeFilter)}
-                      className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 outline-none focus:border-slate-400"
+                      className="rounded-full border border-[var(--ops-divider-strong)] bg-white px-3 py-1 text-xs font-semibold text-slate-700 outline-none focus:border-[var(--ops-accent)]"
                     >
                       {MAP_TYPE_FILTER_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>
@@ -1122,8 +1120,8 @@ export default function SmartBinDashboard() {
                       }
                       size="sm"
                       className={cn(
-                        "rounded-full bg-slate-900 text-white hover:bg-slate-800",
-                        addMode && "bg-emerald-600 hover:bg-emerald-600"
+                        "rounded-full border border-[var(--ops-divider-strong)] bg-white text-slate-700 hover:border-[var(--ops-accent)] hover:text-[var(--ops-accent)]",
+                        addMode && "border-[var(--ops-accent)] bg-[color:rgba(0,184,124,0.08)] text-[var(--ops-accent)]"
                       )}
                     >
                       <Plus className="h-4 w-4" />
@@ -1133,10 +1131,10 @@ export default function SmartBinDashboard() {
                       size="sm"
                       variant={hasGeneratedRoute ? "default" : "outline"}
                       className={cn(
-                        "rounded-full",
+                        "rounded-full border-[var(--ops-divider-strong)] bg-white text-slate-700",
                         hasGeneratedRoute
-                          ? "border border-amber-400 bg-white text-amber-500 hover:bg-amber-50"
-                          : "border-slate-200 bg-white"
+                          ? "border-[var(--ops-accent)] bg-[color:rgba(0,184,124,0.08)] text-[var(--ops-accent)] hover:bg-[color:rgba(0,184,124,0.12)]"
+                          : "hover:border-[var(--ops-accent)] hover:text-[var(--ops-accent)]"
                       )}
                       onClick={openGenerateRouteDialog}
                       disabled={routeLoading}
@@ -1153,7 +1151,7 @@ export default function SmartBinDashboard() {
               </div>
 
               {(routeError || routeStopsPreview.length > 0 || routeLoading) && (
-                <div className="rounded-2xl border border-slate-200 bg-white/80 px-3 py-2 text-xs text-slate-600">
+                <div className="rounded-xl border border-[var(--ops-divider)] bg-white px-3 py-2 text-xs text-slate-600">
                   {routeError ? (
                     <span className="text-rose-600">{routeError}</span>
                   ) : routeLoading ? (
@@ -1194,7 +1192,7 @@ export default function SmartBinDashboard() {
                           </Button>
                           <Button
                             size="sm"
-                            className="rounded-full bg-emerald-500 text-white hover:bg-emerald-600"
+                            className="rounded-full bg-[var(--ops-accent)] text-white hover:bg-[color:rgba(0,184,124,0.9)]"
                             onClick={handleSendRouteToCollectionService}
                             disabled={routeDispatching}
                           >
@@ -1210,14 +1208,23 @@ export default function SmartBinDashboard() {
                 </div>
               )}
 
-              <div className="relative">
+              <motion.div
+                className={cn(
+                  "relative overflow-hidden rounded-2xl border bg-white transition-colors",
+                  selectedId
+                    ? "border-[color:rgba(0,184,124,0.5)] ring-2 ring-[color:rgba(0,184,124,0.18)]"
+                    : "border-[var(--ops-divider-strong)]"
+                )}
+                animate={{ y: selectedId ? -2 : 0 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+              >
                 {addMode && (
-                  <div className="absolute left-4 top-4 z-[1000] rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 shadow">
+                  <div className="absolute left-4 top-4 z-[1000] rounded-full border border-[color:rgba(0,184,124,0.25)] bg-[color:rgba(0,184,124,0.1)] px-3 py-1 text-xs font-semibold text-[var(--ops-accent)]">
                     Click map to place an bin
                   </div>
                 )}
                 {moveMode && selectedBin && (
-                  <div className="absolute left-4 top-14 z-[1000] rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-xs font-semibold text-slate-700 shadow">
+                  <div className="absolute left-4 top-14 z-[1000] rounded-full border border-[var(--ops-divider-strong)] bg-white px-3 py-1 text-xs font-semibold text-slate-700">
                     Click map to reposition {selectedBin.id}
                   </div>
                 )}
@@ -1233,11 +1240,11 @@ export default function SmartBinDashboard() {
                   onMove={handleMoveBin}
                   onSelect={handleSelectBin}
                 />
-              </div>
+              </motion.div>
 
-              <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
+              <div className="flex flex-wrap items-center gap-4 border-t border-[var(--ops-divider)] pt-4 text-xs text-slate-600">
                 <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-[var(--ops-accent)]" />
                   <span>Low &lt; 50%</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1273,15 +1280,15 @@ export default function SmartBinDashboard() {
               </div>
             </div>
 
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-5 lg:border-l lg:border-[var(--ops-divider)] lg:pl-6">
               <div
                 id="alerts"
-                className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-lg backdrop-blur scroll-mt-28"
+                className="scroll-mt-28"
               >
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start justify-between gap-3 border-b border-[var(--ops-divider)] pb-3">
                   <div>
                     <div className="flex items-center gap-2">
-                      <h3 className="text-base font-semibold">Recent alerts</h3>
+                      <h3 className="text-base font-semibold tracking-tight text-slate-950">Alerts</h3>
                       <Bell className="h-4 w-4 text-slate-500" />
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-1">
@@ -1293,8 +1300,8 @@ export default function SmartBinDashboard() {
                           className={cn(
                             "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition",
                             alertsFilter === option.value
-                              ? "border-slate-900 bg-slate-900 text-white"
-                              : "border-slate-200 bg-white text-slate-600"
+                              ? "border-[var(--ops-accent)] bg-[color:rgba(0,184,124,0.08)] text-[var(--ops-accent)]"
+                              : "border-[var(--ops-divider-strong)] bg-white text-slate-600"
                           )}
                         >
                           <span>{option.label}</span>
@@ -1302,8 +1309,8 @@ export default function SmartBinDashboard() {
                             className={cn(
                               "rounded-full border px-1.5 py-0.5 text-[10px] font-bold leading-none",
                               alertsFilter === option.value
-                                ? "border-white/40 bg-white/20 text-white"
-                                : "border-slate-300 bg-slate-100 text-slate-700"
+                                ? "border-[color:rgba(0,184,124,0.25)] bg-[color:rgba(0,184,124,0.12)] text-[var(--ops-accent)]"
+                                : "border-[var(--ops-divider-strong)] bg-slate-100 text-slate-700"
                             )}
                           >
                             {alertsCounts[option.value]}
@@ -1312,31 +1319,31 @@ export default function SmartBinDashboard() {
                       ))}
                     </div>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 rounded-full border-slate-200 bg-white px-2.5 text-xs"
-                    onClick={() => void loadAlerts(alertsFilter, true)}
-                    disabled={alertsLoading}
-                  >
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 rounded-full border-[var(--ops-divider-strong)] bg-white px-2.5 text-xs text-slate-700 hover:border-[var(--ops-accent)] hover:text-[var(--ops-accent)]"
+                  onClick={() => void loadAlerts(alertsFilter, true)}
+                  disabled={alertsLoading}
+                >
                     {alertsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
                   </Button>
                 </div>
 
                 {alertsError && (
-                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-700">
                     {alertsError}
                   </div>
                 )}
 
-                <div className="mt-4 max-h-[24rem] space-y-3 overflow-y-auto pr-1">
+                <div className="mt-3 max-h-[30rem] space-y-1 overflow-y-auto pr-1">
                   {alertsLoading ? (
-                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-5 text-center text-xs text-slate-500">
+                    <div className="rounded-lg border border-[var(--ops-divider)] bg-white px-3 py-5 text-center text-xs text-slate-500">
                       <Loader2 className="mx-auto h-4 w-4 animate-spin text-slate-400" />
                       <div className="mt-2">Loading alerts...</div>
                     </div>
                   ) : alerts.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-3 py-5 text-center text-xs text-slate-500">
+                    <div className="rounded-lg border border-dashed border-[var(--ops-divider)] bg-white px-3 py-5 text-center text-xs text-slate-500">
                       {alertsFilter === "open"
                         ? "No open alert for now."
                         : alertsFilter === "seen"
@@ -1344,67 +1351,80 @@ export default function SmartBinDashboard() {
                           : "No old alert yet."}
                     </div>
                   ) : (
-                    alerts.map((alert) => (
-                      <div
-                        key={alert.id}
-                        className={cn("rounded-2xl border p-3 text-sm", getAlertCardToneClass(alert))}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <CircleAlert className="h-4 w-4" />
-                              <span className="font-semibold">{alertTypeLabels[alert.type]}</span>
-                              <span
+                    <AnimatePresence initial={false}>
+                      {alerts.map((alert) => (
+                        <motion.div
+                          key={alert.id}
+                          layout
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -8 }}
+                          transition={{ duration: 0.2, ease: "easeOut" }}
+                          className={cn("rounded-lg border-l-2 px-3 py-2 text-sm", getAlertCardToneClass(alert))}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <CircleAlert className="h-4 w-4" />
+                                <span className="font-semibold">{alertTypeLabels[alert.type]}</span>
+                                <span
+                                  className={cn(
+                                    "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                                    alert.status === "resolved"
+                                      ? "border-slate-300 bg-white text-slate-600"
+                                      : "border-white/80 bg-white/70 text-current"
+                                  )}
+                                >
+                                  {alertStatusLabels[alert.status]}
+                                </span>
+                              </div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {formatAlertTimeAgo(alert.timestamp)} · {alert.bin_id}
+                              </div>
+                              <p className="mt-2 text-xs text-slate-600">{alert.message}</p>
+                            </div>
+
+                            {alert.status === "open" ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleMarkAlertAsSeen(alert.id)}
+                                disabled={updatingAlertId === alert.id}
                                 className={cn(
-                                  "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                                  alert.status === "resolved"
-                                    ? "border-slate-300 bg-white text-slate-600"
-                                    : "border-white/80 bg-white/70 text-current"
+                                  alertCheckIconBaseClass,
+                                  "border border-slate-300 bg-white text-slate-400 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
                                 )}
                               >
-                                {alertStatusLabels[alert.status]}
+                                {updatingAlertId === alert.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Check className="h-4 w-4 stroke-[2.6]" />
+                                )}
+                              </button>
+                            ) : (
+                              <span
+                                className={cn(
+                                  alertCheckIconBaseClass,
+                                  "border border-emerald-300 bg-emerald-100 text-emerald-600"
+                                )}
+                              >
+                                <Check className="h-4 w-4 stroke-[2.8]" />
                               </span>
-                            </div>
-                            <div className="mt-1 text-xs text-slate-500">
-                              {formatAlertTimeAgo(alert.timestamp)} · {alert.bin_id}
-                            </div>
-                            <p className="mt-2 text-xs text-slate-600">{alert.message}</p>
+                            )}
                           </div>
-
-                          {alert.status === "open" ? (
-                            <button
-                              type="button"
-                              onClick={() => void handleMarkAlertAsSeen(alert.id)}
-                              disabled={updatingAlertId === alert.id}
-                              className={cn(
-                                alertCheckIconBaseClass,
-                                "border border-slate-300 bg-white text-slate-400 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
-                              )}
-                            >
-                              {updatingAlertId === alert.id ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Check className="h-4 w-4 stroke-[2.6]" />
-                              )}
-                            </button>
-                          ) : (
-                            <span
-                              className={cn(
-                                alertCheckIconBaseClass,
-                                "border border-emerald-300 bg-emerald-100 text-emerald-600 shadow-sm"
-                              )}
-                            >
-                              <Check className="h-4 w-4 stroke-[2.8]" />
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ))
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
                   )}
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-lg backdrop-blur">
+              <motion.div
+                key={selectedBin?.id ?? "no-selection"}
+                initial={{ opacity: 0.86, x: 8 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-lg backdrop-blur"
+              >
                 <h3 className="text-base font-semibold">Selected bin</h3>
                 {selectedBin ? (
                   <div className="mt-4 space-y-4 text-sm text-slate-600">
@@ -1592,9 +1612,9 @@ export default function SmartBinDashboard() {
                     Click a bin on the map or in the table to view details.
                   </div>
                 )}
-              </div>
+              </motion.div>
             </div>
-          </section>
+          </motion.section>
 
           <section
             id="bins"
