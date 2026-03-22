@@ -14,7 +14,7 @@ export class CounterService {
     const counter = await this.counterModel.findOneAndUpdate(
       { name },
       { $inc: { value: 1 } },
-      { returnDocument: 'after', upsert: true }, // create if doesn't exist
+      { returnDocument: 'after', upsert: true },
     );
 
     return counter.value;
@@ -24,6 +24,11 @@ export class CounterService {
   async getNextBinId(): Promise<string> {
     const number = await this.getNextValue('bin');
     return `BIN-${number.toString().padStart(3, '0')}`;
+  }
+
+  async getNextAlertId(): Promise<string> {
+    const number = await this.getNextValue('alert');
+    return `ALERT-${number.toString().padStart(3, '0')}`;
   }
 
   async getNextRouteId(): Promise<string> {

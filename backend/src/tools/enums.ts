@@ -33,6 +33,8 @@ export enum BinStatus {
 export enum AlertType {
   // bin reached critical fill level
   OVERFLOW = 'overflow',
+  // bin reached critical battery level
+  LOW_BATTERY = 'low_battery',
   // sensor error
   SENSOR_FAILURE = 'sensor_failure',
   // no data received for long time

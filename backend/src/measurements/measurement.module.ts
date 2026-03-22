@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Measurement, MeasurementSchema } from './measurement.schema';
 import { MeasurementService } from './measurement.service';
+import { MeasurementController } from './measurement.controller';
 
 @Module({
   imports: [
@@ -10,6 +11,7 @@ import { MeasurementService } from './measurement.service';
     ]),
   ],
   providers: [MeasurementService],
+  controllers: [MeasurementController],
   exports: [MeasurementService],
 })
 export class MeasurementModule {}

@@ -3,6 +3,8 @@ import { AppController } from './app.controller';
 import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { BinModule } from './bins/bin.module';
+import { MeasurementModule } from './measurements/measurement.module';
+import { AlertModule } from './alerts/alert.module';
 
 @Module({
   imports: [
@@ -16,6 +18,8 @@ import { BinModule } from './bins/bin.module';
         : 'mongodb://mongodb:27017/sensight_bin',
     ),
     BinModule,
+    MeasurementModule,
+    AlertModule,
   ],
   controllers: [AppController],
 })

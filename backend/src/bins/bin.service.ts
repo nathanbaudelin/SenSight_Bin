@@ -11,6 +11,10 @@ import { MeasurementCreateDto } from 'src/measurements/dtos/create-measurement.d
 import { Measurement } from 'src/measurements/measurement.schema';
 import { ApiException } from 'src/tools/api.exception';
 import { BinUpdateDto } from './dtos/update-bin.dto';
+import { PaginatedContentDto } from 'src/tools/pagination.dto';
+import { BinQueryDto } from './dtos/query-bin.dto';
+import { AlertStatus, AlertType, BinStatus } from 'src/tools/enums';
+import { AlertService } from 'src/alerts/alert.service';
 
 @Injectable()
 export class BinService {
@@ -18,6 +22,7 @@ export class BinService {
     @InjectModel(Bin.name)
     private binModel: Model<BinDocument>,
     private counterService: CounterService,
+    private readonly alertService: AlertService,
   ) {}
 
   async create(bin: BinCreateDto): Promise<BinDto> {
@@ -34,26 +39,49 @@ export class BinService {
     return res;
   }
 
-  async registerMeasurement(
-    binId: string,
-    measurement: MeasurementCreateDto,
-  ): Promise<Measurement> {
-    const bin = await this.binModel.findOne({ id: binId }).exec();
+  async findAll({
+    page = 1,
+    limit = 10,
+    type,
+    status,
+  }: BinQueryDto = {}): Promise<PaginatedContentDto<BinDto>> {
+    let filter = {};
 
-    if (!bin) throw new ApiException('bin.not_found', 404, { binId });
+    if (type) filter = { ...filter, type: type };
+    if (status) {
+      filter = { ...filter, status: status };
+    } else {
+      filter = { ...filter, status: { $ne: BinStatus.REMOVED } };
+    }
 
-    const res: Measurement = {
-      bin_id: binId,
-      filling_level: 100 - (measurement.filling_level * 100) / bin.depth,
-      battery_level: measurement.battery_level,
+    const skip = (page - 1) * limit;
+
+    const [bins, total] = await Promise.all([
+      this.binModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      this.binModel.countDocuments(filter),
+    ]);
+
+    const res = bins.map((bin) => plainToInstance(BinDto, bin.toObject()));
+
+    return {
+      data: res,
+      total,
+      page,
+      lastPage: Math.ceil(total / limit),
     };
+  }
 
-    await this.update(binId, {
-      filling_level: res.filling_level,
-      battery_level: res.battery_level,
-    });
+  async findOneId(binId: string): Promise<BinDto> {
+    const existingBin = await this.binModel.findOne({ id: binId });
 
-    return res;
+    if (!existingBin)
+      throw new ApiException('bin.not_found', 404, { provided: binId });
+
+    return plainToInstance(BinDto, existingBin.toObject());
   }
 
   async update(binId: string, updateData: BinUpdateDto): Promise<BinDto> {
@@ -69,5 +97,92 @@ export class BinService {
     if (res.location) res.location = plainToInstance(Location, res.location);
 
     return res;
+  }
+
+  async registerMeasurement(
+    binId: string,
+    measurement: MeasurementCreateDto,
+  ): Promise<Measurement> {
+    const bin = await this.binModel.findOne({ id: binId }).exec();
+
+    if (!bin) throw new ApiException('bin.not_found', 404, { binId });
+
+    const res: Measurement = {
+      bin_id: binId,
+      filling_level: Math.round(
+        100 - (measurement.filling_level * 100) / bin.depth,
+      ),
+      battery_level: measurement.battery_level,
+    };
+
+    await this.alertCheck(res);
+
+    await this.update(binId, {
+      filling_level: res.filling_level,
+      battery_level: res.battery_level,
+    });
+
+    return res;
+  }
+
+  async alertCheck(res: Measurement) {
+    if (res.battery_level < 15) {
+      const existingAlert = await this.alertService.findAll({
+        limit: 1,
+        type: AlertType.LOW_BATTERY,
+        binId: res.bin_id,
+        status: AlertStatus.OPEN,
+      });
+      if (existingAlert.data.length === 0) {
+        await this.alertService.create({
+          bin_id: res.bin_id,
+          type: AlertType.LOW_BATTERY,
+          message:
+            'Battery level of ' +
+            res.bin_id +
+            ' dropped below 15%. Maintenance required soon.',
+        });
+      }
+    }
+
+    if (res.filling_level < 0 || res.filling_level > 100) {
+      const existingAlert = await this.alertService.findAll({
+        limit: 1,
+        type: AlertType.SENSOR_FAILURE,
+        binId: res.bin_id,
+        status: AlertStatus.OPEN,
+      });
+      if (existingAlert.data.length === 0) {
+        await this.alertService.create({
+          bin_id: res.bin_id,
+          type: AlertType.SENSOR_FAILURE,
+          message:
+            'Sensor error detected on ' +
+            res.bin_id +
+            ' (invalid readings or hardware fault).',
+        });
+      }
+    }
+
+    if (res.filling_level > 90 && res.filling_level < 100) {
+      const existingAlert = await this.alertService.findAll({
+        limit: 1,
+        type: AlertType.LOW_BATTERY,
+        binId: res.bin_id,
+        status: AlertStatus.OPEN,
+      });
+      if (existingAlert.data.length === 0) {
+        await this.alertService.create({
+          bin_id: res.bin_id,
+          type: AlertType.OVERFLOW,
+          message:
+            'Bin ' +
+            res.bin_id +
+            ' is ' +
+            res.filling_level.toString() +
+            '% full and requires immediate collection.',
+        });
+      }
+    }
   }
 }
