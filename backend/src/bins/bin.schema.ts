@@ -9,6 +9,9 @@ export class Bin {
   @Prop({ required: true, unique: true, index: true, immutable: true })
   id: string;
 
+  @Prop({ unique: true, sparse: true, immutable: true })
+  device_uid?: string;
+
   @Prop({ enum: BinType, default: BinType.UNKNOWN })
   type?: BinType;
 

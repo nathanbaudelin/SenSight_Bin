@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Bin, BinDocument } from './bin.schema';
@@ -13,11 +13,19 @@ import { ApiException } from 'src/tools/api.exception';
 import { BinUpdateDto } from './dtos/update-bin.dto';
 import { PaginatedContentDto } from 'src/tools/pagination.dto';
 import { BinQueryDto } from './dtos/query-bin.dto';
-import { AlertStatus, AlertType, BinStatus } from 'src/tools/enums';
+import { AlertStatus, AlertType, BinStatus, BinType } from 'src/tools/enums';
 import { AlertService } from 'src/alerts/alert.service';
+
+interface RegisterDeviceInput {
+  device_uid: string;
+  depth?: number;
+  battery_level?: number;
+}
 
 @Injectable()
 export class BinService {
+  private readonly logger = new Logger(BinService.name);
+
   constructor(
     @InjectModel(Bin.name)
     private binModel: Model<BinDocument>,
@@ -35,6 +43,43 @@ export class BinService {
 
     const res = plainToInstance(BinDto, saved.toObject());
     if (res.location) res.location = plainToInstance(Location, res.location);
+
+    return res;
+  }
+
+  async registerDevice({
+    device_uid,
+    depth,
+    battery_level,
+  }: RegisterDeviceInput): Promise<BinDto> {
+    const existingBin = await this.binModel.findOne({ device_uid }).exec();
+    if (existingBin) {
+      this.logger.log(
+        `Existing device registration reused for uid=${device_uid}, bin=${existingBin.id}`,
+      );
+      return plainToInstance(BinDto, existingBin.toObject());
+    }
+
+    const created = new this.binModel({
+      id: await this.counterService.getNextBinId(),
+      device_uid,
+      type: BinType.UNKNOWN,
+      depth: depth && depth > 0 ? depth : 100,
+      battery_level:
+        battery_level && battery_level > 0 && battery_level <= 100
+          ? battery_level
+          : 100,
+      filling_level: 0,
+      status: BinStatus.UNVERIFIED,
+    });
+
+    const saved = await created.save();
+    const res = plainToInstance(BinDto, saved.toObject());
+    if (res.location) res.location = plainToInstance(Location, res.location);
+
+    this.logger.log(
+      `Created unverified bin=${res.id} for uid=${device_uid} with depth=${res.depth}`,
+    );
 
     return res;
   }
@@ -103,6 +148,10 @@ export class BinService {
     binId: string,
     measurement: MeasurementCreateDto,
   ): Promise<Measurement> {
+    this.logger.log(
+      `Measurement received for bin=${binId}: raw_distance=${measurement.filling_level}, battery=${measurement.battery_level}`,
+    );
+
     const bin = await this.binModel.findOne({ id: binId }).exec();
 
     if (!bin) throw new ApiException('bin.not_found', 404, { binId });
@@ -121,6 +170,10 @@ export class BinService {
       filling_level: res.filling_level,
       battery_level: res.battery_level,
     });
+
+    this.logger.log(
+      `Measurement processed for bin=${binId}: computed_fill=${res.filling_level}, depth=${bin.depth}`,
+    );
 
     return res;
   }
