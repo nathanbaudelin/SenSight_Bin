@@ -15,7 +15,7 @@ type ApiResponse<T> = {
 };
 
 type PaginatedBins = {
-  data: BackendBin[];
+  data: BackendBin[] | BackendBin;
   total: number;
   page: number;
   lastPage: number;
@@ -45,6 +45,11 @@ const randomInt = (min: number, max: number) => Math.floor(Math.random() * (max 
 const toNumberOrNull = (value: string) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+};
+const toBackendBinsList = (raw: PaginatedBins["data"] | null | undefined): BackendBin[] => {
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") return [raw];
+  return [];
 };
 
 const parseApiMessage = (payload: unknown, fallback: string) => {
@@ -95,7 +100,7 @@ export default function BinTest() {
         throw new Error(parseApiMessage(payload, "Unable to load unverified bins."));
       }
 
-      const bins = Array.isArray(payload?.data?.data) ? payload.data.data : [];
+      const bins = toBackendBinsList(payload?.data?.data);
       setUnverifiedBins(bins);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to load unverified bins.";

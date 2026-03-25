@@ -19,6 +19,7 @@ export type BinFillStatus = "low" | "medium" | "full";
 
 export type BackendBin = {
   id: string;
+  device_uid?: string;
   type?: BinType;
   location?: {
     lat: number;
@@ -44,6 +45,7 @@ export type BinUpdatePayload = {
 
 export type Bin = {
   id: string;
+  deviceUid: string | null;
   type: BinType;
   status: BinLifecycleStatus;
   depth: number;
@@ -99,9 +101,14 @@ export const mapBackendBinToBin = (source: BackendBin): Bin => {
     typeof source.location?.lat === "number" && typeof source.location?.lng === "number";
   const lat = hasLocation ? source.location!.lat : 0;
   const lng = hasLocation ? source.location!.lng : 0;
+  const deviceUid =
+    typeof source.device_uid === "string" && source.device_uid.trim().length > 0
+      ? source.device_uid
+      : null;
 
   return {
     id: source.id,
+    deviceUid,
     type: source.type ?? "unknown",
     status: source.status,
     depth: source.depth,

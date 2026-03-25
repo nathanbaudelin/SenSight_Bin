@@ -105,7 +105,7 @@ type ApiResponse<T> = {
 };
 
 type BinsPagePayload = {
-  data: BackendBin[];
+  data: BackendBin[] | BackendBin;
   total: number;
   page: number;
   lastPage: number;
@@ -246,6 +246,11 @@ const toNumberOrNull = (rawValue: string) => {
   const parsed = Number(rawValue);
   return Number.isFinite(parsed) ? parsed : null;
 };
+const toBackendBinsList = (raw: BinsPagePayload["data"] | null | undefined): BackendBin[] => {
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") return [raw];
+  return [];
+};
 
 const getAlertCardToneClass = (alert: BackendAlert) => {
   if (alert.status === "resolved") return "border-slate-200 bg-slate-50 text-slate-700";
@@ -383,6 +388,7 @@ export default function SmartBinDashboard() {
     () => bins.find((bin) => bin.id === selectedId) ?? null,
     [bins, selectedId]
   );
+  const selectedBinHasDeviceUid = !!selectedBin?.deviceUid;
 
   const createSelectedBin = useMemo(
     () => unverifiedBins.find((bin) => bin.id === createSelectedBinId) ?? null,
@@ -426,7 +432,7 @@ export default function SmartBinDashboard() {
           throw new Error(parseApiMessage(payload, "Unable to load bins from backend."));
         }
 
-        const backendBins = Array.isArray(payload?.data?.data) ? payload.data.data : [];
+        const backendBins = toBackendBinsList(payload?.data?.data);
         const mapped = backendBins.map(mapBackendBinToBin);
         setBins(mapped);
 
@@ -574,7 +580,7 @@ export default function SmartBinDashboard() {
   }, [loadBins]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedId || !selectedBinHasDeviceUid) return;
 
     void refreshSelectedBinFill(selectedId);
 
@@ -583,7 +589,7 @@ export default function SmartBinDashboard() {
     }, 5000);
 
     return () => clearInterval(refreshInterval);
-  }, [refreshSelectedBinFill, selectedId]);
+  }, [refreshSelectedBinFill, selectedBinHasDeviceUid, selectedId]);
 
   useEffect(() => {
     void loadAlerts(alertsFilter);
@@ -792,6 +798,9 @@ export default function SmartBinDashboard() {
       depth: selectedBin.depth,
       battery_level: clamp(Math.round(selectedBin.battery), 0, 100),
     };
+    if (!selectedBin.deviceUid) {
+      payload.filling_level = clamp(Math.round(selectedBin.fill), 0, 100);
+    }
 
     if (selectedBin.hasLocation) {
       payload.location = {
@@ -1544,9 +1553,27 @@ export default function SmartBinDashboard() {
                           style={{ width: `${selectedBin.fill}%` }}
                         />
                       </div>
-                      <p className="mt-2 text-xs text-slate-500">
-                        Read-only: updated automatically by backend sensors.
-                      </p>
+                      {selectedBin.deviceUid ? (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Read-only: updated automatically by backend sensors.
+                        </p>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            value={selectedBin.fill}
+                            onChange={(event) =>
+                              updateSelectedBin({ fill: clamp(Math.round(Number(event.target.value)), 0, 100) })
+                            }
+                            className="w-full"
+                          />
+                          <p className="text-xs text-slate-500">
+                            Manual test mode: adjust fill level then save changes.
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
