@@ -19,7 +19,7 @@ struct AppConfig {
     }
 
     String registrationUrl() const {
-        return normalizedBackendBaseUrl() + "/devices/register";
+        return normalizedBackendBaseUrl() + "/bins";
     }
 
 private:

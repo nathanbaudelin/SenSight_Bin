@@ -1,25 +1,24 @@
-import { Body, Controller, Get, Logger, Post } from '@nestjs/common';
-import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { IsOptional, IsPositive, IsString } from 'class-validator';
+import { Controller, Get } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { BinService } from './bins/bin.service';
 
-class DeviceRegisterDto {
-  @IsString()
-  device_uid: string;
+// class DeviceRegisterDto {
+//   @IsString()
+//   device_uid: string;
 
-  @IsOptional()
-  @IsPositive()
-  depth?: number;
+//   @IsOptional()
+//   @IsPositive()
+//   depth?: number;
 
-  @IsOptional()
-  @IsPositive()
-  battery_level?: number;
-}
+//   @IsOptional()
+//   @IsPositive()
+//   battery_level?: number;
+// }
 
 @Controller()
 @ApiTags('System')
 export class AppController {
-  private readonly logger = new Logger(AppController.name);
+  // private readonly logger = new Logger(AppController.name);
 
   constructor(private readonly binService: BinService) {}
 
@@ -28,24 +27,24 @@ export class AppController {
     return { status: 'backend ok' };
   }
 
-  @Post('devices/register')
-  @ApiOperation({ summary: 'Register a device and return its bin id.' })
-  @ApiBody({ type: DeviceRegisterDto })
-  async registerDevice(@Body() payload: DeviceRegisterDto) {
-    this.logger.log(
-      `Device register request received for uid=${payload.device_uid}, depth=${payload.depth ?? 'default'}, battery=${payload.battery_level ?? 'default'}`,
-    );
+  // @Post('devices/register')
+  // @ApiOperation({ summary: 'Register a device and return its bin id.' })
+  // @ApiBody({ type: DeviceRegisterDto })
+  // async registerDevice(@Body() payload: DeviceRegisterDto) {
+  //   this.logger.log(
+  //     `Device register request received for uid=${payload.device_uid}, depth=${payload.depth ?? 'default'}, battery=${payload.battery_level ?? 'default'}`,
+  //   );
 
-    const bin = await this.binService.registerDevice(payload);
+  //   const bin = await this.binService.registerDevice(payload);
 
-    this.logger.log(
-      `Device uid=${payload.device_uid} mapped to bin=${bin.id}, status=${bin.status}, depth=${bin.depth}`,
-    );
+  //   this.logger.log(
+  //     `Device uid=${payload.device_uid} mapped to bin=${bin.id}, status=${bin.status}, depth=${bin.depth}`,
+  //   );
 
-    return {
-      bin_id: bin.id,
-      depth: bin.depth,
-      status: bin.status,
-    };
-  }
+  //   return {
+  //     bin_id: bin.id,
+  //     depth: bin.depth,
+  //     status: bin.status,
+  //   };
+  // }
 }

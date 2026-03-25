@@ -24,6 +24,14 @@ export class BinDto {
 
   @Expose()
   @IsOptional()
+  @IsString()
+  @ApiProperty({
+    description: 'Device uid',
+  })
+  device_uid?: string;
+
+  @Expose()
+  @IsOptional()
   @IsEnum(BinType)
   @ApiPropertyOptional({
     description: 'Bin type',

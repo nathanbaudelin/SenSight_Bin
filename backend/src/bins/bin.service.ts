@@ -13,14 +13,14 @@ import { ApiException } from 'src/tools/api.exception';
 import { BinUpdateDto } from './dtos/update-bin.dto';
 import { PaginatedContentDto } from 'src/tools/pagination.dto';
 import { BinQueryDto } from './dtos/query-bin.dto';
-import { AlertStatus, AlertType, BinStatus, BinType } from 'src/tools/enums';
+import { AlertStatus, AlertType, BinStatus } from 'src/tools/enums';
 import { AlertService } from 'src/alerts/alert.service';
 
-interface RegisterDeviceInput {
-  device_uid: string;
-  depth?: number;
-  battery_level?: number;
-}
+// interface RegisterDeviceInput {
+//   device_uid: string;
+//   depth?: number;
+//   battery_level?: number;
+// }
 
 @Injectable()
 export class BinService {
@@ -34,6 +34,18 @@ export class BinService {
   ) {}
 
   async create(bin: BinCreateDto): Promise<BinDto> {
+    if (bin.device_uid) {
+      const existingBin = await this.binModel.findOne({
+        device_uid: bin.device_uid,
+      });
+
+      if (existingBin) {
+        this.logger.log(
+          `Existing device registration reused for uid=${bin.device_uid}, bin=${existingBin.id}`,
+        );
+        return plainToInstance(BinDto, existingBin.toObject());
+      }
+    }
     const newBin: Bin = {
       id: await this.counterService.getNextBinId(),
       ...bin,
@@ -47,42 +59,42 @@ export class BinService {
     return res;
   }
 
-  async registerDevice({
-    device_uid,
-    depth,
-    battery_level,
-  }: RegisterDeviceInput): Promise<BinDto> {
-    const existingBin = await this.binModel.findOne({ device_uid }).exec();
-    if (existingBin) {
-      this.logger.log(
-        `Existing device registration reused for uid=${device_uid}, bin=${existingBin.id}`,
-      );
-      return plainToInstance(BinDto, existingBin.toObject());
-    }
+  // async registerDevice({
+  //   device_uid,
+  //   depth,
+  //   battery_level,
+  // }: RegisterDeviceInput): Promise<BinDto> {
+  //   const existingBin = await this.binModel.findOne({ device_uid }).exec();
+  //   if (existingBin) {
+  //     this.logger.log(
+  //       `Existing device registration reused for uid=${device_uid}, bin=${existingBin.id}`,
+  //     );
+  //     return plainToInstance(BinDto, existingBin.toObject());
+  //   }
 
-    const created = new this.binModel({
-      id: await this.counterService.getNextBinId(),
-      device_uid,
-      type: BinType.UNKNOWN,
-      depth: depth && depth > 0 ? depth : 100,
-      battery_level:
-        battery_level && battery_level > 0 && battery_level <= 100
-          ? battery_level
-          : 100,
-      filling_level: 0,
-      status: BinStatus.UNVERIFIED,
-    });
+  //   const created = new this.binModel({
+  //     id: await this.counterService.getNextBinId(),
+  //     device_uid,
+  //     type: BinType.UNKNOWN,
+  //     depth: depth && depth > 0 ? depth : 100,
+  //     battery_level:
+  //       battery_level && battery_level > 0 && battery_level <= 100
+  //         ? battery_level
+  //         : 100,
+  //     filling_level: 0,
+  //     status: BinStatus.UNVERIFIED,
+  //   });
 
-    const saved = await created.save();
-    const res = plainToInstance(BinDto, saved.toObject());
-    if (res.location) res.location = plainToInstance(Location, res.location);
+  //   const saved = await created.save();
+  //   const res = plainToInstance(BinDto, saved.toObject());
+  //   if (res.location) res.location = plainToInstance(Location, res.location);
 
-    this.logger.log(
-      `Created unverified bin=${res.id} for uid=${device_uid} with depth=${res.depth}`,
-    );
+  //   this.logger.log(
+  //     `Created unverified bin=${res.id} for uid=${device_uid} with depth=${res.depth}`,
+  //   );
 
-    return res;
-  }
+  //   return res;
+  // }
 
   async findAll({
     page = 1,
