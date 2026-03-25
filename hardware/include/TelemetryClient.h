@@ -31,8 +31,15 @@ public:
         }
 
         RegistrationResult result;
+        const int dataStart = findJsonObjectStart(responseBody, "data");
         result.binId = extractJsonString(responseBody, "bin_id");
-        result.depthCm = extractJsonFloat(responseBody, "depth");
+        if (result.binId.isEmpty()) {
+            result.binId = extractJsonString(responseBody, "id", dataStart);
+        }
+        result.depthCm = extractJsonFloat(responseBody, "depth", dataStart);
+        if (result.depthCm <= 0.0F) {
+            result.depthCm = extractJsonFloat(responseBody, "depth");
+        }
         result.success = !result.binId.isEmpty();
         return result;
     }
@@ -59,6 +66,7 @@ private:
     static String buildRegistrationBody(const RegistrationPayload &payload) {
         String body = "{\"device_uid\":\"";
         body += escapeJson(payload.deviceUid);
+        body += "\",\"type\":\"unknown\",\"status\":\"unverified";
         body += "\",\"depth\":";
         body += String(payload.depthCm, 1);
         body += ",\"battery_level\":";
@@ -76,12 +84,20 @@ private:
         return body;
     }
 
-    static String extractJsonString(const String &json, const char *key) {
+    static int findJsonObjectStart(const String &json, const char *key) {
+        String pattern = "\"";
+        pattern += key;
+        pattern += "\":{";
+
+        return json.indexOf(pattern);
+    }
+
+    static String extractJsonString(const String &json, const char *key, int fromIndex = 0) {
         String pattern = "\"";
         pattern += key;
         pattern += "\":\"";
 
-        const int start = json.indexOf(pattern);
+        const int start = json.indexOf(pattern, max(fromIndex, 0));
         if (start < 0) {
             return "";
         }
@@ -95,12 +111,12 @@ private:
         return json.substring(valueStart, valueEnd);
     }
 
-    static float extractJsonFloat(const String &json, const char *key) {
+    static float extractJsonFloat(const String &json, const char *key, int fromIndex = 0) {
         String pattern = "\"";
         pattern += key;
         pattern += "\":";
 
-        const int start = json.indexOf(pattern);
+        const int start = json.indexOf(pattern, max(fromIndex, 0));
         if (start < 0) {
             return 0.0F;
         }
