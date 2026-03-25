@@ -479,7 +479,7 @@ export default function SmartBinDashboard() {
         setAlertsCounts({
           open: openCountPayload.total,
           seen: seenCountPayload.total,
-          old: seenCountPayload.total + resolvedCountPayload.total,
+          old: resolvedCountPayload.total,
         });
 
         let fetchedAlerts: BackendAlert[] = [];
@@ -491,12 +491,8 @@ export default function SmartBinDashboard() {
           const payload = await fetchAlertsByStatus("acknowledged");
           fetchedAlerts = payload.alerts;
         } else {
-          const [acknowledgedAlerts, resolvedAlerts] = await Promise.all([
-            fetchAlertsByStatus("acknowledged"),
-            fetchAlertsByStatus("resolved"),
-          ]);
-
-          fetchedAlerts = [...acknowledgedAlerts.alerts, ...resolvedAlerts.alerts]
+          const payload = await fetchAlertsByStatus("resolved");
+          fetchedAlerts = payload.alerts
             .sort((left, right) => {
               const leftTimestamp = new Date(left.timestamp).getTime();
               const rightTimestamp = new Date(right.timestamp).getTime();

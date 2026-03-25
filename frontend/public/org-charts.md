@@ -31,7 +31,7 @@ graph TD
     style FT1 fill:#e8f4f8,stroke:#1e3a5f,color:#1e3a5f
 ```
 
-> **Total : 6 employés**
+> **Total : 7 employés**
 
 ---
 
