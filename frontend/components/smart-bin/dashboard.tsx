@@ -445,6 +445,24 @@ export default function SmartBinDashboard() {
     []
   );
 
+  const refreshSelectedBinFill = useCallback(async (binId: string) => {
+    try {
+      const response = await fetch(`/api/bins/${encodeURIComponent(binId)}`, {
+        cache: "no-store",
+      });
+      const payload = (await response.json().catch(() => null)) as ApiResponse<BackendBin> | null;
+
+      if (!response.ok || !payload?.data) return;
+
+      const latestFill = clamp(Math.round(payload.data.filling_level), 0, 100);
+      setBins((previousBins) =>
+        previousBins.map((bin) => (bin.id === binId ? { ...bin, fill: latestFill } : bin))
+      );
+    } catch {
+      // Silent fail to avoid showing transient polling errors in the dashboard.
+    }
+  }, []);
+
   const fetchAlertsByStatus = useCallback(
     async (status: AlertStatusValue, limit = ALERT_FETCH_LIMIT) => {
       const response = await fetch(
@@ -551,6 +569,18 @@ export default function SmartBinDashboard() {
 
     return () => clearInterval(refreshInterval);
   }, [loadBins]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+
+    void refreshSelectedBinFill(selectedId);
+
+    const refreshInterval = setInterval(() => {
+      void refreshSelectedBinFill(selectedId);
+    }, 5000);
+
+    return () => clearInterval(refreshInterval);
+  }, [refreshSelectedBinFill, selectedId]);
 
   useEffect(() => {
     void loadAlerts(alertsFilter);
@@ -757,7 +787,6 @@ export default function SmartBinDashboard() {
       type: selectedBin.type,
       status: selectedBin.status,
       depth: selectedBin.depth,
-      filling_level: clamp(Math.round(selectedBin.fill), 0, 100),
       battery_level: clamp(Math.round(selectedBin.battery), 0, 100),
     };
 
@@ -1512,16 +1541,9 @@ export default function SmartBinDashboard() {
                           style={{ width: `${selectedBin.fill}%` }}
                         />
                       </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        value={selectedBin.fill}
-                        onChange={(event) =>
-                          updateSelectedBin({ fill: clamp(Math.round(Number(event.target.value)), 0, 100) })
-                        }
-                        className="mt-2 w-full"
-                      />
+                      <p className="mt-2 text-xs text-slate-500">
+                        Read-only: updated automatically by backend sensors.
+                      </p>
                     </div>
 
                     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
