@@ -1,9 +1,23 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsPositive, Max, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsOptional,
+  IsPositive,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 import { BinStatus, BinType } from 'src/tools/enums';
 import { Location } from 'src/tools/tools';
 
 export class BinCreateDto {
+  @IsOptional()
+  @IsString()
+  @ApiProperty({
+    description: 'Device uid',
+  })
+  device_uid?: string;
+
   @IsOptional()
   @IsEnum(BinType)
   @ApiPropertyOptional({

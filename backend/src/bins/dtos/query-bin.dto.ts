@@ -16,15 +16,13 @@ export class BinQueryDto extends IntersectionType(PaginationDto) {
 export class BinQuerySwaggerDto {
   @ApiPropertyOptional({
     description: 'Optional search string to filter bin by type',
-    type: 'string',
-    enum: Object.values(BinType),
+    enum: BinType,
   })
   type?: BinType;
 
   @ApiPropertyOptional({
     description: 'Optional search string to filter bin by status',
-    type: 'string',
-    enum: Object.values(BinStatus),
+    enum: BinStatus,
   })
   status?: BinStatus;
 
