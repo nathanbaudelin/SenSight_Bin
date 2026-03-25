@@ -367,8 +367,11 @@ export default function SmartBinDashboard() {
   );
 
   const averageFill = useMemo(() => {
-    if (!bins.length) return 0;
-    return Math.round(bins.reduce((sum, bin) => sum + bin.fill, 0) / bins.length);
+    const binsForAverage = bins.filter((bin) => bin.status !== "unverified");
+    if (!binsForAverage.length) return 0;
+    return Math.round(
+      binsForAverage.reduce((sum, bin) => sum + bin.fill, 0) / binsForAverage.length
+    );
   }, [bins]);
 
   const needsCollection = useMemo(
@@ -1087,7 +1090,7 @@ export default function SmartBinDashboard() {
               <div className="mt-4 text-3xl font-semibold">{averageFill}%</div>
               <div className="mt-2 flex items-center gap-2 text-xs text-emerald-600">
                 <TrendingDown className="h-3.5 w-3.5" />
-                All statuses included
+                Unverified bins excluded
               </div>
             </div>
             <div className="rounded-3xl border border-white/60 bg-white/80 p-6 shadow-lg backdrop-blur">
