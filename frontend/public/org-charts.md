@@ -9,8 +9,7 @@ graph TD
     CEO["🟦 CEO"]
     CTO["🟩 CTO"]
     COO["🟩 COO"]
-    BDM["🟩 Business Development
-    Manager"]
+    BDM["🟩 Sales Executive (1)"]
     EE1["🔹 Embedded Engineer (1)"]
     BD1["🔹 Backend Developer (1)"]
     FT1["🔹 Field Technician (1)"]
@@ -75,7 +74,8 @@ graph TD
     CTO["🟩 CTO"]
     COO["🟩 COO"]
     HOS["🟩 Sales Executive (1)"]
-    EE3["🔹 Embedded Engineers (2)"]
+    EE3["🔹 Embedded
+    Engineers (2)"]
     BD3["🔹 Backend Developers (2)"]
     DS2["🔹 Data Scientist (1)"]
     FT4["🔹 Field Technicians (2)"]
