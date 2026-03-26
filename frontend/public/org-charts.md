@@ -79,7 +79,8 @@ graph TD
     BD3["🔹 Backend Developers (2)"]
     DS2["🔹 Data Scientist (1)"]
     FT4["🔹 Field Technicians (2)"]
-    CSM2["🔹 Customer Success Manager (1)"]
+    CSM2["🔹 Customer Success
+    Manager (1)"]
 
     CEO --> CTO
     CEO --> COO
