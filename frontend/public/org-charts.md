@@ -48,7 +48,7 @@ graph TD
     DS1["🔹 Data Scientist (1)"]
     FT2["🔹 Field Technicians (2)"]
     CSM1["🔹 Customer Success Manager (1)"]
-    SE1["🔹 Sales Executive (1)"]
+    SE1["🔹 Sales Executive (2)"]
 
     CEO --> CTO
     CEO --> COO
@@ -72,7 +72,7 @@ graph TD
     style SE1 fill:#e8f4f8,stroke:#1e3a5f,color:#1e3a5f
 ```
 
-> **Total : 12 employés**
+> **Total : 13 employés**
 
 ---
 
