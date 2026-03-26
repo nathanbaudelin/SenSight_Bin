@@ -229,10 +229,10 @@ export class BinService {
       }
     }
 
-    if (res.filling_level > 90 && res.filling_level < 100) {
+    if (res.filling_level > 80 && res.filling_level < 100) {
       const existingAlert = await this.alertService.findAll({
         limit: 1,
-        type: AlertType.LOW_BATTERY,
+        type: AlertType.OVERFLOW,
         binId: res.bin_id,
         status: AlertStatus.OPEN,
       });
