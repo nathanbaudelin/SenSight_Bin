@@ -1,42 +1,50 @@
-import { Controller, Get, Post, Body } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { BinService } from './bins/bin.service';
 
-interface Bin {
-  bin_id: string;
-  current_fill: number;
-}
+// class DeviceRegisterDto {
+//   @IsString()
+//   device_uid: string;
 
-interface OptimizeRequest {
-  bins: Bin[];
-}
+//   @IsOptional()
+//   @IsPositive()
+//   depth?: number;
 
-interface OptimizeResponse {
-  algorithm: string;
-  route: { bin_id: string; current_fill: number }[];
-}
+//   @IsOptional()
+//   @IsPositive()
+//   battery_level?: number;
+// }
 
 @Controller()
+@ApiTags('System')
 export class AppController {
-  @Get()
-  ping() {
+  // private readonly logger = new Logger(AppController.name);
+
+  constructor(private readonly binService: BinService) {}
+
+  @Get('health')
+  health() {
     return { status: 'backend ok' };
   }
 
-  @Post('measurements')
-  createMeasurement(@Body() body: Bin) {
-    console.log('Measurement received:', body);
-    return { received: true };
-  }
+  // @Post('devices/register')
+  // @ApiOperation({ summary: 'Register a device and return its bin id.' })
+  // @ApiBody({ type: DeviceRegisterDto })
+  // async registerDevice(@Body() payload: DeviceRegisterDto) {
+  //   this.logger.log(
+  //     `Device register request received for uid=${payload.device_uid}, depth=${payload.depth ?? 'default'}, battery=${payload.battery_level ?? 'default'}`,
+  //   );
 
-  @Post('ai/test')
-  async testAI(@Body() body: OptimizeRequest) {
-    const aiUrl = process.env.AI_URL;
-    const res: Response = await fetch(`${aiUrl}/optimize`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+  //   const bin = await this.binService.registerDevice(payload);
 
-    const data: OptimizeResponse = (await res.json()) as OptimizeResponse;
-    return data;
-  }
+  //   this.logger.log(
+  //     `Device uid=${payload.device_uid} mapped to bin=${bin.id}, status=${bin.status}, depth=${bin.depth}`,
+  //   );
+
+  //   return {
+  //     bin_id: bin.id,
+  //     depth: bin.depth,
+  //     status: bin.status,
+  //   };
+  // }
 }

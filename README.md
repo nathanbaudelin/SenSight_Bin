@@ -1,6 +1,6 @@
-# SmartBin
+# SenSight Bin
 
-SmartBin is a **smart bin project** combining IoT, a backend, AI, and a web interface to optimize waste collection routes.
+SenSight Bin is a **smart bin project** combining IoT, a backend, AI, and a web interface to optimize waste collection routes.
 
 The project includes:
 
@@ -165,13 +165,13 @@ Password: ...
 
 ## 7. Quick Ports Summary
 
-| Service | Localhost (dev) | Docker |
-|---------|----------------|--------|
-| Backend | 3000           | 3000   |
-| AI      | 8001           | 8000   |
-| MongoDB | 27017          | 27017  |
-| Mongo Express | 8081      | 8081  |
-| Frontend | depends | depends |
+| Service       | Localhost (dev)     | Docker |
+|---------------|---------------------|--------|
+| Backend       | depend of your .env | 3000   |
+| AI            | depend of your .env | 8000   |
+| MongoDB       | -                   | 27017  |
+| Mongo Express | -                   | 8081   |
+| Frontend      | depend of your .env | 3001   |
 
 ---
 
@@ -182,4 +182,4 @@ Password: ...
 - Test backend & AI via curl or browser  
 - Monitor DB via **Mongo Express**  
 
-This setup ensures you can **develop and test SmartBin quickly**.
+This setup ensures you can **develop and test SenSight Bin quickly**.
