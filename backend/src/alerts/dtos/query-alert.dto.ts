@@ -13,6 +13,10 @@ export class AlertQueryDto extends IntersectionType(PaginationDto) {
   status?: AlertStatus;
 
   @IsOptional()
+  @IsEnum(AlertStatus)
+  noStatus?: AlertStatus;
+
+  @IsOptional()
   @IsString()
   binId?: string;
 }
@@ -31,6 +35,14 @@ export class AlertQuerySwaggerDto {
     enum: Object.values(AlertStatus),
   })
   status?: AlertStatus;
+
+  @ApiPropertyOptional({
+    description:
+      "Optional search string to filter alert by status we don't want",
+    type: 'string',
+    enum: Object.values(AlertStatus),
+  })
+  noStatus?: AlertStatus;
 
   @ApiPropertyOptional({
     description: "Optional search string to filter alerts by bin's id",

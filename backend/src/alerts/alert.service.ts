@@ -36,6 +36,7 @@ export class AlertService {
     limit = 10,
     type,
     status,
+    noStatus,
     binId,
   }: AlertQueryDto = {}): Promise<PaginatedContentDto<AlertDto>> {
     let filter = {};
@@ -47,6 +48,7 @@ export class AlertService {
     } else {
       filter = { ...filter, status: { $ne: AlertStatus.RESOLVED } };
     }
+    if (noStatus) filter = { ...filter, status: { $ne: noStatus } };
 
     const skip = (page - 1) * limit;
 
