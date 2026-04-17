@@ -6,6 +6,8 @@ import { BinModule } from './bins/bin.module';
 import { MeasurementModule } from './measurements/measurement.module';
 import { AlertModule } from './alerts/alert.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { PredictionModule } from './predictions/prediction.module';
+import { MonitoringModule } from './monitoring/monitoring.module';
 
 @Module({
   imports: [
@@ -21,6 +23,8 @@ import { ScheduleModule } from '@nestjs/schedule';
     BinModule,
     MeasurementModule,
     AlertModule,
+    PredictionModule,
+    MonitoringModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController],

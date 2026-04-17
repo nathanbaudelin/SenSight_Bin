@@ -1,9 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { AlertService } from './alerts/alert.service';
+import { AlertService } from '../alerts/alert.service';
 import { Cron } from '@nestjs/schedule';
 import { Model } from 'mongoose';
-import { MeasurementDocument } from './measurements/measurement.schema';
-import { AlertStatus, AlertType } from './tools/enums';
+import {
+  Measurement,
+  MeasurementDocument,
+} from '../measurements/measurement.schema';
+import { AlertStatus, AlertType } from '../tools/enums';
+import { InjectModel } from '@nestjs/mongoose';
 
 export interface LastMeasurementPerBin {
   _id: string;
@@ -17,10 +21,12 @@ export interface LastMeasurementPerBin {
 
 @Injectable()
 export class MonitoringService {
+  private readonly logger = new Logger(MonitoringService.name);
+
   constructor(
+    @InjectModel(Measurement.name)
     private readonly measurementModel: Model<MeasurementDocument>,
     private readonly alertService: AlertService,
-    private readonly logger = new Logger(MonitoringService.name),
   ) {}
 
   @Cron('0 1 * * 1') // Monday 01:00 AM
