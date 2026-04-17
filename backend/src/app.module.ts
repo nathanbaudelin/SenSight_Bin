@@ -5,6 +5,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { BinModule } from './bins/bin.module';
 import { MeasurementModule } from './measurements/measurement.module';
 import { AlertModule } from './alerts/alert.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AlertModule } from './alerts/alert.module';
     BinModule,
     MeasurementModule,
     AlertModule,
+    ScheduleModule.forRoot(),
   ],
   controllers: [AppController],
 })

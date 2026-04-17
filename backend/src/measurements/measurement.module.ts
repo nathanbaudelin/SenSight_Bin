@@ -12,6 +12,6 @@ import { MeasurementController } from './measurement.controller';
   ],
   providers: [MeasurementService],
   controllers: [MeasurementController],
-  exports: [MeasurementService],
+  exports: [MeasurementService, MongooseModule],
 })
 export class MeasurementModule {}
