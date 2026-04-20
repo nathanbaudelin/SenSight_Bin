@@ -104,14 +104,41 @@ const createMaintenanceIcon = (selected: boolean, routeStop: boolean) => {
   });
 };
 
+const createDepotIcon = () =>
+  divIcon({
+    className: "",
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 100 100" style="display:block;filter:drop-shadow(0 4px 10px rgba(15,23,42,0.28));">
+      <circle cx="50" cy="50" r="42" fill="#0f172a" stroke="#ffffff" stroke-width="7"></circle>
+      <path d="M28 62V38c0-3.3 2.7-6 6-6h32c3.3 0 6 2.7 6 6v24" fill="none" stroke="#f8fafc" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path d="M22 62h56" fill="none" stroke="#f8fafc" stroke-width="8" stroke-linecap="round"></path>
+      <rect x="40" y="50" width="20" height="12" rx="2" fill="#f59e0b"></rect>
+    </svg>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+  });
+
 export type BinMapProps = {
   bins: Bin[];
   center: LatLngLiteral;
+  depot?: {
+    id: string;
+    name: string;
+    address: string;
+    lat: number;
+    lng: number;
+  };
   addMode: boolean;
   moveMode: boolean;
   selectedId: string | null;
   routePath?: LatLngLiteral[];
-  routeStops?: { id: string; lat: number; lng: number }[];
+  routeStops?: {
+    id: string;
+    lat: number;
+    lng: number;
+    kind: "depot" | "bin";
+    label: string;
+    sequence: number | null;
+  }[];
   onAdd: (coords: LatLngLiteral) => void;
   onMove: (coords: LatLngLiteral) => void;
   onSelect: (id: string) => void;
@@ -155,6 +182,7 @@ function FitRouteBounds({ routePath }: { routePath?: LatLngLiteral[] }) {
 export default function BinMap({
   bins,
   center,
+  depot,
   addMode,
   moveMode,
   selectedId,
@@ -174,6 +202,18 @@ export default function BinMap({
 
         <FitRouteBounds routePath={routePath} />
         <MapClickHandler addMode={addMode} moveMode={moveMode} onAdd={onAdd} onMove={onMove} />
+
+        {depot && (
+          <Marker position={[depot.lat, depot.lng]} icon={createDepotIcon()}>
+            <Tooltip direction="top" offset={[0, -12]} opacity={1}>
+              <div className="space-y-1">
+                <div className="text-xs font-semibold text-slate-900">Truck depot</div>
+                <div className="text-xs font-semibold text-slate-700">{depot.name}</div>
+                <div className="text-xs text-slate-600">{depot.address}</div>
+              </div>
+            </Tooltip>
+          </Marker>
+        )}
 
         {routePath && routePath.length > 1 && (
           <>
@@ -206,6 +246,8 @@ export default function BinMap({
         {(routeStops ?? []).map((stop, index) => {
           const isStart = index === 0;
           const isEnd = index === (routeStops?.length ?? 1) - 1;
+          const isDepotStop = stop.kind === "depot";
+          const stopLabel = isDepotStop ? (isStart ? "DEPOT" : isEnd ? "RETURN" : "DEPOT") : `#${stop.sequence}`;
           return (
             <CircleMarker
               key={`route-stop-${stop.id}-${index}`}
@@ -221,7 +263,7 @@ export default function BinMap({
             >
               <Tooltip permanent direction="top" offset={[0, -14]} opacity={1}>
                 <div className="text-[11px] font-semibold text-slate-900">
-                  {isStart ? "START" : isEnd ? "END" : `#${index + 1}`} {stop.id}
+                  {isDepotStop ? stopLabel : `${stopLabel} ${stop.id}`}
                 </div>
               </Tooltip>
             </CircleMarker>
@@ -231,14 +273,18 @@ export default function BinMap({
         {bins.map((bin) => {
           const fillStatus = getBinStatus(bin.fill);
           const isSelected = selectedId === bin.id;
-          const routeStopIndex = (routeStops ?? []).findIndex((stop) => stop.id === bin.id);
-          const isRouteStop = routeStopIndex >= 0;
+          const routeStop = (routeStops ?? []).find(
+            (stop) => stop.id === bin.id && stop.kind === "bin"
+          );
+          const isRouteStop = !!routeStop;
           const commonTooltip = (
             <Tooltip direction="top" offset={[0, -8]} opacity={1}>
               <div className="space-y-1">
                 <div className="text-xs font-semibold text-slate-900">{bin.id}</div>
                 {isRouteStop && (
-                  <div className="text-xs font-semibold text-slate-700">Route stop #{routeStopIndex + 1}</div>
+                  <div className="text-xs font-semibold text-slate-700">
+                    Route stop #{routeStop?.sequence}
+                  </div>
                 )}
                 <div className="text-xs text-slate-600">Type: {TYPE_LABELS[bin.type]}</div>
                 <div className="text-xs text-slate-600">Status: {bin.status}</div>

@@ -75,14 +75,38 @@ type MapTypeFilter =
   | "electronic"
   | "unknown";
 type PendingCoords = { lat: number; lng: number };
-type RouteStopPayload = { id: string; lat: number; lng: number };
-type SimulatedRoutePayload = {
+type DepotPayload = {
+  id: string;
+  name: string;
+  shortName: string;
+  address: string;
+  lat: number;
+  lng: number;
+};
+type RouteCandidatePayload = {
+  id: string;
+  lat: number;
+  lng: number;
+  fill: number;
+  distanceFromDepotKm: number;
+};
+type RouteStopPayload = {
+  id: string;
+  lat: number;
+  lng: number;
+  kind: "depot" | "bin";
+  label: string;
+  sequence: number | null;
+  fill?: number;
+};
+type PreparedRoutePayload = {
   routeId: string;
   provider: "simulated-backend";
   mode: "driving";
   typeFilter: MapTypeFilter;
   scheduledStartAt: string;
-  orderedStops: RouteStopPayload[];
+  depot: DepotPayload;
+  candidateBins: RouteCandidatePayload[];
 };
 type AlertTypeValue =
   | "overflow"
@@ -130,7 +154,23 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "medium", label: "Medium 50-80%" },
   { key: "low", label: "Low < 50%" },
 ];
-const ALERT_FETCH_LIMIT = 100
+const ALERT_FETCH_LIMIT = 100;
+const MAX_ROUTE_BINS = 4;
+const ROUTE_PRIORITY_FILL_THRESHOLD = 50;
+const ROUTE_DISTANCE_PENALTY_PER_KM = 4.5;
+const ROUTE_FULL_BIN_BONUS = 16;
+
+// Based on the Barcelona municipal cleaning depot below Parc de Joan Miro.
+const BARCELONA_COLLECTION_DEPOT: DepotPayload = {
+  id: "DEPOT-JOAN-MIRO",
+  name: "Parc de Neteja de Joan Miro",
+  shortName: "Joan Miro depot",
+  address: "Carrer de la Diputacio, 9, Barcelona",
+  lat: 41.37781,
+  lng: 2.14747,
+};
+
+type CostMatrix = Array<Array<number | null>>;
 const ALERT_LIST_FILTER_OPTIONS: { value: AlertListFilter; label: string }[] = [
   { value: "open", label: "Open" },
   { value: "seen", label: "Seen" },
@@ -239,6 +279,36 @@ const fillBarClass = (fill: number) => {
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const formatCoords = (value: number) => value.toFixed(5);
+const toRadians = (value: number) => (value * Math.PI) / 180;
+const getDistanceBetweenPointsKm = (
+  start: { lat: number; lng: number },
+  end: { lat: number; lng: number }
+) => {
+  const earthRadiusKm = 6371;
+  const deltaLat = toRadians(end.lat - start.lat);
+  const deltaLng = toRadians(end.lng - start.lng);
+  const startLat = toRadians(start.lat);
+  const endLat = toRadians(end.lat);
+
+  const haversine =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(startLat) * Math.cos(endLat) * Math.sin(deltaLng / 2) ** 2;
+
+  return 2 * earthRadiusKm * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+};
+const formatDistanceKm = (distanceKm: number) =>
+  `${distanceKm.toLocaleString(undefined, {
+    minimumFractionDigits: distanceKm < 10 ? 1 : 0,
+    maximumFractionDigits: distanceKm < 10 ? 1 : 0,
+  })} km`;
+const formatDurationMinutes = (durationMinutes: number) => {
+  const roundedMinutes = Math.max(1, Math.round(durationMinutes));
+  if (roundedMinutes < 60) return `${roundedMinutes} min`;
+
+  const hours = Math.floor(roundedMinutes / 60);
+  const minutes = roundedMinutes % 60;
+  return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
+};
 const getCoordinatesLabel = (bin: Bin) =>
   bin.hasLocation ? `${formatCoords(bin.lat)}, ${formatCoords(bin.lng)}` : "Not configured";
 const parseApiMessage = (payload: unknown, fallback: string) => {
@@ -285,6 +355,98 @@ const toPredictionPayload = (raw: unknown): BackendPrediction | null => {
         : undefined,
     data: candidate.data,
   };
+};
+const isCostMatrix = (value: unknown): value is CostMatrix =>
+  Array.isArray(value) &&
+  value.every(
+    (row) =>
+      Array.isArray(row) &&
+      row.every((cell) => cell === null || (typeof cell === "number" && Number.isFinite(cell)))
+  );
+
+const readCostMatrixValue = (matrix: CostMatrix, fromIndex: number, toIndex: number) => {
+  const value = matrix[fromIndex]?.[toIndex];
+  return typeof value === "number" && Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
+};
+
+const computeLoopCost = (matrix: CostMatrix, order: number[]) => {
+  if (!order.length) return 0;
+
+  let cost = readCostMatrixValue(matrix, 0, order[0]);
+  for (let index = 1; index < order.length; index += 1) {
+    cost += readCostMatrixValue(matrix, order[index - 1], order[index]);
+  }
+  cost += readCostMatrixValue(matrix, order[order.length - 1], 0);
+
+  return cost;
+};
+
+const computeOptimalLoopOrder = (matrix: CostMatrix, stopCount: number) => {
+  const indexes = Array.from({ length: stopCount }, (_, index) => index + 1);
+  if (!indexes.length) return { bestOrder: [] as number[], bestCost: 0 };
+
+  let bestOrder = indexes;
+  let bestCost = Number.POSITIVE_INFINITY;
+
+  const visit = (remaining: number[], current: number[]) => {
+    if (!remaining.length) {
+      const currentCost = computeLoopCost(matrix, current);
+      if (currentCost < bestCost) {
+        bestCost = currentCost;
+        bestOrder = current;
+      }
+      return;
+    }
+
+    remaining.forEach((candidate, candidateIndex) => {
+      visit(
+        remaining.filter((_, index) => index !== candidateIndex),
+        [...current, candidate]
+      );
+    });
+  };
+
+  visit(indexes, []);
+  return { bestOrder, bestCost };
+};
+
+const buildFallbackCostMatrix = (points: Array<{ lat: number; lng: number }>): CostMatrix =>
+  points.map((sourcePoint, sourceIndex) =>
+    points.map((targetPoint, targetIndex) =>
+      sourceIndex === targetIndex ? 0 : getDistanceBetweenPointsKm(sourcePoint, targetPoint)
+    )
+  );
+
+const scoreBinForRoute = (bin: Bin) => {
+  const distanceFromDepotKm = getDistanceBetweenPointsKm(BARCELONA_COLLECTION_DEPOT, bin);
+  const urgencyBonus = bin.fill >= 80 ? ROUTE_FULL_BIN_BONUS : bin.fill >= 65 ? 8 : 0;
+  const score = bin.fill * 1.15 + urgencyBonus - distanceFromDepotKm * ROUTE_DISTANCE_PENALTY_PER_KM;
+
+  return { bin, distanceFromDepotKm, score };
+};
+
+const selectRouteCandidateBins = (routeEligibleBins: Bin[]): RouteCandidatePayload[] => {
+  const scoredBins = routeEligibleBins
+    .map(scoreBinForRoute)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        right.bin.fill - left.bin.fill ||
+        left.distanceFromDepotKm - right.distanceFromDepotKm
+    );
+
+  const priorityBins = scoredBins.filter(
+    ({ bin }) => bin.fill >= ROUTE_PRIORITY_FILL_THRESHOLD
+  );
+  const candidatePool = priorityBins.length > 0 ? priorityBins : scoredBins;
+
+  return candidatePool.slice(0, MAX_ROUTE_BINS).map(({ bin, distanceFromDepotKm }) => ({
+    id: bin.id,
+    lat: bin.lat,
+    lng: bin.lng,
+    fill: bin.fill,
+    distanceFromDepotKm,
+  }));
 };
 
 const getAlertCardToneClass = (alert: BackendAlert) => {
@@ -364,6 +526,11 @@ export default function SmartBinDashboard() {
   const [lastGeneratedRouteId, setLastGeneratedRouteId] = useState<string | null>(null);
   const [lastRouteTypeFilter, setLastRouteTypeFilter] = useState<MapTypeFilter>("all");
   const [lastRouteScheduledStartAt, setLastRouteScheduledStartAt] = useState<string | null>(null);
+  const [routeMetrics, setRouteMetrics] = useState<{
+    distanceKm: number;
+    durationMinutes: number;
+  } | null>(null);
+  const [routeOrderExplanation, setRouteOrderExplanation] = useState<string | null>(null);
   const [routeDispatching, setRouteDispatching] = useState(false);
   const [routeDispatchStatus, setRouteDispatchStatus] = useState<string | null>(null);
   const [routeDialogOpen, setRouteDialogOpen] = useState(false);
@@ -460,16 +627,27 @@ export default function SmartBinDashboard() {
     return "Live API";
   }, [bins.length, binsLoading]);
 
-  const routeStopsPreview = routeStops.map((stop) => stop.id);
+  const routeStopsPreview = routeStops.map((stop) => stop.label);
+  const routeCollectionPreview = routeStops
+    .filter((stop) => stop.kind === "bin")
+    .map((stop) => `#${stop.sequence ?? "-"} ${stop.id}`);
   const hasGeneratedRoute = routeStops.length > 0 && routePath.length > 1;
-  const routeStartLabel = useMemo(
+  const routeScheduleLabel = useMemo(
     () => formatDateTimeForDisplay(lastRouteScheduledStartAt),
     [lastRouteScheduledStartAt]
   );
   const routeTypeLabel = useMemo(
-    () => MAP_TYPE_FILTER_OPTIONS.find((option) => option.value === lastRouteTypeFilter)?.label ?? "All types",
+    () =>
+      MAP_TYPE_FILTER_OPTIONS.find((option) => option.value === lastRouteTypeFilter)?.label ??
+      "All types",
     [lastRouteTypeFilter]
   );
+  const routeStartStopLabel = routeStops[0]?.label ?? "-";
+  const routeEndStopLabel = routeStops[routeStops.length - 1]?.label ?? "-";
+  const routeMetricsLabel = useMemo(() => {
+    if (!routeMetrics) return null;
+    return `${formatDistanceKm(routeMetrics.distanceKm)} loop · ${formatDurationMinutes(routeMetrics.durationMinutes)}`;
+  }, [routeMetrics]);
   const handleBinsListScopeChange = (scope: BinsListScope) => {
     setBinsListScope((currentScope) => (currentScope === scope ? currentScope : scope));
   };
@@ -974,25 +1152,19 @@ export default function SmartBinDashboard() {
     }
   };
 
-  const buildSimulatedRoutePayload = (
+  const buildPreparedRoutePayload = (
     typeFilter: MapTypeFilter,
     scheduledStartAt: string
-  ): SimulatedRoutePayload | null => {
-    const routeEligibleBins = mapBins.filter(
-      (bin) => bin.status === "active" && matchesMapTypeFilter(bin, typeFilter)
+  ): PreparedRoutePayload | null => {
+    const routeEligibleBins = bins.filter(
+      (bin) =>
+        isBinMappable(bin) &&
+        bin.status === "active" &&
+        matchesMapTypeFilter(bin, typeFilter)
     );
+    const candidateBins = selectRouteCandidateBins(routeEligibleBins);
 
-    const urgentBins = routeEligibleBins
-      .filter((bin) => bin.fill >= 50)
-      .sort((a, b) => b.fill - a.fill)
-      .slice(0, 4);
-
-    const fallbackBins = routeEligibleBins.slice(0, 4);
-    const selectedStops = (urgentBins.length >= 2 ? urgentBins : fallbackBins)
-      .slice(0, 4)
-      .map((bin) => ({ id: bin.id, lat: bin.lat, lng: bin.lng }));
-
-    if (selectedStops.length < 2) return null;
+    if (!candidateBins.length) return null;
 
     return {
       routeId: `route-${Date.now()}`,
@@ -1000,7 +1172,8 @@ export default function SmartBinDashboard() {
       mode: "driving",
       typeFilter,
       scheduledStartAt,
-      orderedStops: selectedStops,
+      depot: BARCELONA_COLLECTION_DEPOT,
+      candidateBins,
     };
   };
 
@@ -1010,12 +1183,100 @@ export default function SmartBinDashboard() {
     setRouteDispatchStatus(null);
 
     try {
-      const simulatedPayload = buildSimulatedRoutePayload(typeFilter, scheduledStartAt);
-      if (!simulatedPayload) {
-        throw new Error("Not enough mapped active bins for this type filter.");
+      const preparedPayload = buildPreparedRoutePayload(typeFilter, scheduledStartAt);
+      if (!preparedPayload) {
+        throw new Error("No mapped active bins available for this type filter.");
       }
 
-      const osrmCoordinates = simulatedPayload.orderedStops
+      const optimizationPoints = [
+        { lat: preparedPayload.depot.lat, lng: preparedPayload.depot.lng },
+        ...preparedPayload.candidateBins.map((bin) => ({ lat: bin.lat, lng: bin.lng })),
+      ];
+
+      let bestOrder: number[] = [];
+      let firstLegDistanceKm: number | null = null;
+      let optimizationLabel = "shortest road loop";
+
+      try {
+        const tableCoordinates = optimizationPoints
+          .map((point) => `${point.lng},${point.lat}`)
+          .join(";");
+        const tableResponse = await fetch(
+          `https://router.project-osrm.org/table/v1/driving/${tableCoordinates}?annotations=duration,distance`,
+          { cache: "no-store" }
+        );
+
+        if (!tableResponse.ok) {
+          throw new Error("Routing matrix unavailable");
+        }
+
+        const tableData = (await tableResponse.json().catch(() => null)) as
+          | { durations?: unknown; distances?: unknown }
+          | null;
+
+        if (!isCostMatrix(tableData?.durations) || !isCostMatrix(tableData?.distances)) {
+          throw new Error("Invalid routing matrix");
+        }
+
+        const optimizedLoop = computeOptimalLoopOrder(
+          tableData.durations,
+          preparedPayload.candidateBins.length
+        );
+        bestOrder = optimizedLoop.bestOrder;
+
+        const firstLegMeters =
+          bestOrder.length > 0
+            ? readCostMatrixValue(tableData.distances, 0, bestOrder[0])
+            : Number.POSITIVE_INFINITY;
+        firstLegDistanceKm = Number.isFinite(firstLegMeters) ? firstLegMeters / 1000 : null;
+      } catch {
+        const fallbackMatrix = buildFallbackCostMatrix(optimizationPoints);
+        const optimizedLoop = computeOptimalLoopOrder(
+          fallbackMatrix,
+          preparedPayload.candidateBins.length
+        );
+        bestOrder = optimizedLoop.bestOrder;
+
+        const fallbackFirstLegKm =
+          bestOrder.length > 0
+            ? readCostMatrixValue(fallbackMatrix, 0, bestOrder[0])
+            : Number.POSITIVE_INFINITY;
+        firstLegDistanceKm = Number.isFinite(fallbackFirstLegKm) ? fallbackFirstLegKm : null;
+        optimizationLabel = "shortest approximate loop";
+      }
+
+      const orderedStops: RouteStopPayload[] = [
+        {
+          id: preparedPayload.depot.id,
+          lat: preparedPayload.depot.lat,
+          lng: preparedPayload.depot.lng,
+          kind: "depot",
+          label: preparedPayload.depot.shortName,
+          sequence: null,
+        },
+        ...bestOrder.map((matrixIndex, routeIndex) => {
+          const currentBin = preparedPayload.candidateBins[matrixIndex - 1];
+          return {
+            id: currentBin.id,
+            lat: currentBin.lat,
+            lng: currentBin.lng,
+            kind: "bin" as const,
+            label: currentBin.id,
+            sequence: routeIndex + 1,
+            fill: currentBin.fill,
+          };
+        }),
+        {
+          id: preparedPayload.depot.id,
+          lat: preparedPayload.depot.lat,
+          lng: preparedPayload.depot.lng,
+          kind: "depot",
+          label: preparedPayload.depot.shortName,
+          sequence: null,
+        },
+      ];
+
+      const osrmCoordinates = orderedStops
         .map((stop) => `${stop.lng},${stop.lat}`)
         .join(";");
 
@@ -1045,20 +1306,41 @@ export default function SmartBinDashboard() {
         throw new Error("Empty route path");
       }
 
+      const routeDistanceMeters = data?.routes?.[0]?.distance;
+      const routeDurationSeconds = data?.routes?.[0]?.duration;
+      const firstCollectionStop = orderedStops.find((stop) => stop.kind === "bin") ?? null;
+
       setRoutePath(path);
-      setRouteStops(simulatedPayload.orderedStops);
-      setLastGeneratedRouteId(simulatedPayload.routeId);
-      setLastRouteTypeFilter(simulatedPayload.typeFilter);
-      setLastRouteScheduledStartAt(simulatedPayload.scheduledStartAt);
+      setRouteStops(orderedStops);
+      setLastGeneratedRouteId(preparedPayload.routeId);
+      setLastRouteTypeFilter(preparedPayload.typeFilter);
+      setLastRouteScheduledStartAt(preparedPayload.scheduledStartAt);
+      setRouteMetrics(
+        typeof routeDistanceMeters === "number" && typeof routeDurationSeconds === "number"
+          ? {
+              distanceKm: routeDistanceMeters / 1000,
+              durationMinutes: routeDurationSeconds / 60,
+            }
+          : null
+      );
+      setRouteOrderExplanation(
+        firstCollectionStop
+          ? `${firstCollectionStop.id} is stop #1 because the truck now leaves from ${preparedPayload.depot.shortName} and this order gives the ${optimizationLabel} from depot to depot${firstLegDistanceKm !== null ? `, with a first leg of about ${formatDistanceKm(firstLegDistanceKm)}` : ""}.`
+          : null
+      );
       setRouteDialogOpen(false);
       setRouteDialogError(null);
+      setMapTypeFilter(typeFilter);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to generate route right now.";
       setRouteError(message);
       setRouteDialogError(message);
       setRoutePath([]);
       setRouteStops([]);
+      setLastGeneratedRouteId(null);
       setLastRouteScheduledStartAt(null);
+      setRouteMetrics(null);
+      setRouteOrderExplanation(null);
     } finally {
       setRouteLoading(false);
     }
@@ -1100,6 +1382,8 @@ export default function SmartBinDashboard() {
     setRouteError(null);
     setLastGeneratedRouteId(null);
     setLastRouteScheduledStartAt(null);
+    setRouteMetrics(null);
+    setRouteOrderExplanation(null);
     setRouteDispatchStatus(null);
   };
 
@@ -1250,7 +1534,10 @@ export default function SmartBinDashboard() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-xl font-semibold">Bin map</h2>
-                    <p className="text-sm text-slate-500">Click a bin to view and edit details.</p>
+                    <p className="text-sm text-slate-500">
+                      Click a bin to view and edit details. Collection routes depart from the
+                      Joan Miro municipal depot.
+                    </p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1281,6 +1568,9 @@ export default function SmartBinDashboard() {
                     </select>
                   </div>
                   <div className="ml-2 flex flex-wrap items-center gap-2">
+                    <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-600">
+                      Truck depot · {BARCELONA_COLLECTION_DEPOT.shortName}
+                    </div>
                     <Button
                       onClick={() =>
                         setAddMode((previous) => {
@@ -1326,7 +1616,7 @@ export default function SmartBinDashboard() {
                   {routeError ? (
                     <span className="text-rose-600">{routeError}</span>
                   ) : routeLoading ? (
-                    <span>Simulating backend response and computing road route...</span>
+                    <span>Computing the depot-to-depot road loop...</span>
                   ) : (
                     <div className="space-y-2">
                       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -1335,22 +1625,44 @@ export default function SmartBinDashboard() {
                             <span className="font-semibold text-slate-900">Route {lastGeneratedRouteId ?? ""}</span>
                             <span className="text-slate-400">|</span>
                             <span>Start:</span>
-                            <span className="font-semibold text-slate-900">{routeStopsPreview[0] ?? "-"}</span>
+                            <span className="font-semibold text-slate-900">{routeStartStopLabel}</span>
                             <span className="text-slate-400">|</span>
                             <span>End:</span>
-                            <span className="font-semibold text-slate-900">
-                              {routeStopsPreview[routeStopsPreview.length - 1] ?? "-"}
-                            </span>
+                            <span className="font-semibold text-slate-900">{routeEndStopLabel}</span>
                             <span className="text-slate-400">|</span>
-                            <span>Order:</span>
+                            <span>Loop:</span>
                           </div>
                           <div className="font-semibold text-slate-900">{routeStopsPreview.join(" -> ")}</div>
-                          {routeStartLabel && (
+                          <div className="text-[11px] text-slate-500">
+                            Collection order:{" "}
+                            <span className="font-semibold text-slate-900">
+                              {routeCollectionPreview.join(" -> ")}
+                            </span>
+                          </div>
+                          {routeScheduleLabel && (
                             <div className="text-[11px] text-slate-500">
-                              Start at: <span className="font-semibold text-slate-900">{routeStartLabel}</span>
+                              Start at:{" "}
+                              <span className="font-semibold text-slate-900">{routeScheduleLabel}</span>
                               {" · "}
                               Type: <span className="font-semibold text-slate-900">{routeTypeLabel}</span>
+                              {routeMetricsLabel && (
+                                <>
+                                  {" · "}
+                                  <span className="font-semibold text-slate-900">{routeMetricsLabel}</span>
+                                </>
+                              )}
                             </div>
+                          )}
+                          <div className="text-[11px] text-slate-500">
+                            Depot:{" "}
+                            <span className="font-semibold text-slate-900">
+                              {BARCELONA_COLLECTION_DEPOT.name}
+                            </span>
+                            {" · "}
+                            {BARCELONA_COLLECTION_DEPOT.address}
+                          </div>
+                          {routeOrderExplanation && (
+                            <div className="text-[11px] text-sky-700">{routeOrderExplanation}</div>
                           )}
                         </div>
                         <div className="flex flex-wrap items-center gap-2 md:justify-end">
@@ -1393,6 +1705,7 @@ export default function SmartBinDashboard() {
                 <BinMap
                   bins={mapBins}
                   center={CENTER_BARCELONA}
+                  depot={BARCELONA_COLLECTION_DEPOT}
                   addMode={addMode}
                   moveMode={moveMode}
                   selectedId={selectedId}
@@ -2157,7 +2470,8 @@ export default function SmartBinDashboard() {
           <DialogHeader>
             <DialogTitle className="text-slate-900">Generate collection route</DialogTitle>
             <DialogDescription className="text-slate-600">
-              Choose the bin type and planned collection start date/time.
+              Choose the bin type and planned collection start date/time. Trucks leave from and
+              return to the Joan Miro municipal depot.
             </DialogDescription>
           </DialogHeader>
 
