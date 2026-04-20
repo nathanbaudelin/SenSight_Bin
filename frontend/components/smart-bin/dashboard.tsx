@@ -9,6 +9,7 @@ import {
   CircleAlert,
   Clock3,
   ClipboardX,
+  Eye,
   Loader2,
   MapPinned,
   MousePointerClick,
@@ -48,6 +49,9 @@ import {
   mapBackendBinToBin,
 } from "./bin-data";
 import type { BinMapProps } from "./bin-map";
+import PredictionForecastModal, {
+  type PredictionPayload,
+} from "./prediction-forecast-modal";
 import SmartNav from "./smart-nav";
 
 const BinMap = dynamic<BinMapProps>(() => import("./bin-map"), {
@@ -97,6 +101,8 @@ type BackendAlert = {
   status: AlertStatusValue;
   timestamp: string;
 };
+
+type BackendPrediction = PredictionPayload;
 
 type ApiResponse<T> = {
   status?: string;
@@ -251,6 +257,35 @@ const toBackendBinsList = (raw: BinsPagePayload["data"] | null | undefined): Bac
   if (raw && typeof raw === "object") return [raw];
   return [];
 };
+const toPredictionPayload = (raw: unknown): BackendPrediction | null => {
+  if (!raw || typeof raw !== "object") return null;
+
+  const candidate = raw as {
+    bin_id?: unknown;
+    prediction_unit?: unknown;
+    forecast_days?: unknown;
+    data?: unknown;
+  };
+
+  if (
+    typeof candidate.bin_id !== "string" ||
+    !Array.isArray(candidate.data) ||
+    !candidate.data.every((value) => typeof value === "number" && Number.isFinite(value))
+  ) {
+    return null;
+  }
+
+  return {
+    bin_id: candidate.bin_id,
+    prediction_unit:
+      typeof candidate.prediction_unit === "string" ? candidate.prediction_unit : undefined,
+    forecast_days:
+      typeof candidate.forecast_days === "number" && Number.isFinite(candidate.forecast_days)
+        ? candidate.forecast_days
+        : undefined,
+    data: candidate.data,
+  };
+};
 
 const getAlertCardToneClass = (alert: BackendAlert) => {
   if (alert.status === "resolved") return "border-slate-200 bg-slate-50 text-slate-700";
@@ -336,6 +371,11 @@ export default function SmartBinDashboard() {
   const [routeDialogDate, setRouteDialogDate] = useState("");
   const [routeDialogTime, setRouteDialogTime] = useState("");
   const [routeDialogError, setRouteDialogError] = useState<string | null>(null);
+  const [predictionDialogOpen, setPredictionDialogOpen] = useState(false);
+  const [predictionTargetId, setPredictionTargetId] = useState<string | null>(null);
+  const [predictionLoading, setPredictionLoading] = useState(false);
+  const [predictionError, setPredictionError] = useState<string | null>(null);
+  const [predictionCache, setPredictionCache] = useState<Record<string, BackendPrediction>>({});
   const [alerts, setAlerts] = useState<BackendAlert[]>([]);
   const [alertsFilter, setAlertsFilter] = useState<AlertListFilter>("open");
   const [alertsCounts, setAlertsCounts] = useState<Record<AlertListFilter, number>>({
@@ -393,6 +433,14 @@ export default function SmartBinDashboard() {
   const createSelectedBin = useMemo(
     () => unverifiedBins.find((bin) => bin.id === createSelectedBinId) ?? null,
     [unverifiedBins, createSelectedBinId]
+  );
+  const predictionTargetBin = useMemo(
+    () => bins.find((bin) => bin.id === predictionTargetId) ?? null,
+    [bins, predictionTargetId]
+  );
+  const activePrediction = useMemo(
+    () => (predictionTargetId ? predictionCache[predictionTargetId] ?? null : null),
+    [predictionCache, predictionTargetId]
   );
 
   const latestReading = useMemo(() => {
@@ -471,6 +519,50 @@ export default function SmartBinDashboard() {
       // Silent fail to avoid showing transient polling errors in the dashboard.
     }
   }, []);
+
+  const loadPrediction = useCallback(
+    async (binId: string, force = false, signal?: AbortSignal) => {
+      if (!force && predictionCache[binId]) {
+        setPredictionError(null);
+        return;
+      }
+
+      setPredictionLoading(true);
+      setPredictionError(null);
+
+      try {
+        const response = await fetch(`/api/predictions/${encodeURIComponent(binId)}`, {
+          cache: "no-store",
+          signal,
+        });
+        const payload = (await response.json().catch(() => null)) as ApiResponse<BackendPrediction> | null;
+
+        if (!response.ok) {
+          throw new Error(parseApiMessage(payload, `Unable to load prediction for ${binId}.`));
+        }
+
+        const prediction = toPredictionPayload(payload?.data);
+        if (!prediction) {
+          throw new Error("Prediction payload is invalid.");
+        }
+
+        setPredictionCache((currentCache) => ({
+          ...currentCache,
+          [binId]: prediction,
+        }));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        const message =
+          error instanceof Error ? error.message : `Unable to load prediction for ${binId}.`;
+        setPredictionError(message);
+      } finally {
+        if (!signal?.aborted) {
+          setPredictionLoading(false);
+        }
+      }
+    },
+    [predictionCache]
+  );
 
   const fetchAlertsByStatus = useCallback(
     async (status: AlertStatusValue, limit = ALERT_FETCH_LIMIT) => {
@@ -636,6 +728,15 @@ export default function SmartBinDashboard() {
       setRouteDialogTime(getCurrentTimeInputValue());
     }
   }, [routeDialogDate, routeDialogOpen, routeDialogTime]);
+
+  useEffect(() => {
+    if (!predictionDialogOpen || !predictionTargetId) return;
+
+    const controller = new AbortController();
+    void loadPrediction(predictionTargetId, false, controller.signal);
+
+    return () => controller.abort();
+  }, [loadPrediction, predictionDialogOpen, predictionTargetId]);
 
   const resetCreateDraft = () => {
     setCreateSelectedBinId(null);
@@ -840,6 +941,26 @@ export default function SmartBinDashboard() {
   const handleSelectBin = (id: string) => {
     setSelectedId(id);
     setMoveMode(false);
+  };
+
+  const handleOpenPredictionDialog = (bin: Bin) => {
+    setSelectedId(bin.id);
+    setPredictionTargetId(bin.id);
+    setPredictionError(null);
+    setPredictionDialogOpen(true);
+  };
+
+  const handleRetryPrediction = () => {
+    if (!predictionTargetId) return;
+    void loadPrediction(predictionTargetId, true);
+  };
+
+  const handlePredictionDialogChange = (open: boolean) => {
+    setPredictionDialogOpen(open);
+    if (!open) {
+      setPredictionLoading(false);
+      setPredictionError(null);
+    }
   };
 
   const buildSimulatedRoutePayload = (
@@ -1442,7 +1563,20 @@ export default function SmartBinDashboard() {
               </div>
 
               <div className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-lg backdrop-blur">
-                <h3 className="text-base font-semibold">Selected bin</h3>
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-base font-semibold">Selected bin</h3>
+                  {selectedBin ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-full border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                      onClick={() => handleOpenPredictionDialog(selectedBin)}
+                    >
+                      <Eye className="h-4 w-4" />
+                      See predictions
+                    </Button>
+                  ) : null}
+                </div>
                 {selectedBin ? (
                   <div className="mt-4 space-y-4 text-sm text-slate-600">
                     <div className="flex items-center justify-between">
@@ -1700,19 +1834,20 @@ export default function SmartBinDashboard() {
                     <th className="py-3">Fill level</th>
                     <th className="py-3">Battery</th>
                     <th className="py-3">Status</th>
+                    <th className="py-3">Predictions</th>
                     <th className="py-3">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {binsLoading ? (
                     <tr>
-                      <td className="py-8 text-center text-slate-500" colSpan={7}>
+                      <td className="py-8 text-center text-slate-500" colSpan={8}>
                         Loading bins...
                       </td>
                     </tr>
                   ) : binsForTable.length === 0 ? (
                     <tr>
-                      <td className="py-8 text-center text-slate-500" colSpan={7}>
+                      <td className="py-8 text-center text-slate-500" colSpan={8}>
                         No bin found for this filter.
                       </td>
                     </tr>
@@ -1747,6 +1882,20 @@ export default function SmartBinDashboard() {
                           </Badge>
                         </td>
                         <td className="py-4">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="rounded-full border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleOpenPredictionDialog(bin);
+                            }}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            See predictions
+                          </Button>
+                        </td>
+                        <td className="py-4">
                           <Button size="sm" variant="outline" className="rounded-full border-slate-200 bg-white">
                             Select
                           </Button>
@@ -1760,6 +1909,16 @@ export default function SmartBinDashboard() {
           </section>
         </div>
       </main>
+
+      <PredictionForecastModal
+        open={predictionDialogOpen}
+        onOpenChange={handlePredictionDialogChange}
+        bin={predictionTargetBin}
+        prediction={activePrediction}
+        loading={predictionLoading}
+        error={predictionError}
+        onRetry={handleRetryPrediction}
+      />
 
       <Dialog open={createDialogOpen} onOpenChange={handleCreateDialogChange}>
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto border border-slate-200 bg-white text-slate-900 shadow-2xl">
