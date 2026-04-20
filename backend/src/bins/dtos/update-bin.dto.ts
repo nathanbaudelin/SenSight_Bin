@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   IsEnum,
   IsOptional,
@@ -37,6 +38,7 @@ export class BinUpdateDto {
 
   @IsOptional()
   @IsPositive()
+  @Type(() => Number)
   @ApiProperty({
     description: 'Bin depth',
     example: 120,
@@ -46,6 +48,7 @@ export class BinUpdateDto {
 
   @IsOptional()
   @IsPositive()
+  @Type(() => Number)
   @Min(0)
   @Max(100)
   @ApiProperty({
@@ -57,6 +60,7 @@ export class BinUpdateDto {
 
   @IsOptional()
   @IsPositive()
+  @Type(() => Number)
   @Min(0)
   @Max(100)
   @ApiProperty({

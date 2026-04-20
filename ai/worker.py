@@ -7,14 +7,13 @@ app = FastAPI()
 def ping():
     return {"status": "ai ok"}
 
-@app.post("/optimize")
-def optimize(data: dict):
-    bins = data.get("bins", [])
-    # fake AI: sort by fill level desc
-    sorted_bins = sorted(bins, key=lambda b: b.get("current_fill", 0), reverse=True)
+@app.post("/predict")
+def optimize(body: dict):
+    print(body.get("history"))
     return {
-        "algorithm": "fake_sort_v1",
-        "route": sorted_bins
+        "bin_id": body.get("bin_id"),
+        "prediction_unit": 'percentage_0_to_1',
+        "data": [ 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9 ],
     }
 
 if __name__ == "__main__":

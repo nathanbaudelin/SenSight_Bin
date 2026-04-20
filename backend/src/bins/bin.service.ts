@@ -196,7 +196,7 @@ export class BinService {
         limit: 1,
         type: AlertType.LOW_BATTERY,
         binId: res.bin_id,
-        status: AlertStatus.OPEN,
+        noStatus: AlertStatus.RESOLVED,
       });
       if (existingAlert.data.length === 0) {
         await this.alertService.create({
@@ -215,7 +215,7 @@ export class BinService {
         limit: 1,
         type: AlertType.SENSOR_FAILURE,
         binId: res.bin_id,
-        status: AlertStatus.OPEN,
+        noStatus: AlertStatus.RESOLVED,
       });
       if (existingAlert.data.length === 0) {
         await this.alertService.create({
@@ -234,7 +234,7 @@ export class BinService {
         limit: 1,
         type: AlertType.OVERFLOW,
         binId: res.bin_id,
-        status: AlertStatus.OPEN,
+        noStatus: AlertStatus.RESOLVED,
       });
       if (existingAlert.data.length === 0) {
         await this.alertService.create({

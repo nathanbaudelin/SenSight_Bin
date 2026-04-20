@@ -1,8 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import { IsPositive } from 'class-validator';
 
 export class MeasurementCreateDto {
   @IsPositive()
+  @Type(() => Number)
   @ApiProperty({
     description: 'Filling level measurement (raw data)',
     example: 250,
@@ -11,6 +13,7 @@ export class MeasurementCreateDto {
   filling_level: number;
 
   @IsPositive()
+  @Type(() => Number)
   @ApiProperty({
     description: 'Battery level measurement (percentage)',
     example: 100,
