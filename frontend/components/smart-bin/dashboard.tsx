@@ -434,6 +434,17 @@ export default function SmartBinDashboard() {
     () => unverifiedBins.find((bin) => bin.id === createSelectedBinId) ?? null,
     [unverifiedBins, createSelectedBinId]
   );
+  const createPlacementCoords = useMemo(() => {
+    if (createSelectedBin?.hasLocation) {
+      return {
+        lat: createSelectedBin.lat,
+        lng: createSelectedBin.lng,
+      };
+    }
+
+    return pendingAddCoords;
+  }, [createSelectedBin, pendingAddCoords]);
+  const createLocationLocked = !!createSelectedBin?.hasLocation;
   const predictionTargetBin = useMemo(
     () => bins.find((bin) => bin.id === predictionTargetId) ?? null,
     [bins, predictionTargetId]
@@ -823,7 +834,7 @@ export default function SmartBinDashboard() {
   );
 
   const handleConfirmCreateBin = async () => {
-    if (!pendingAddCoords) {
+    if (!createPlacementCoords) {
       setCreateFormError("Bin position not found. Click on the map again.");
       return;
     }
@@ -848,8 +859,8 @@ export default function SmartBinDashboard() {
         status: createStatus,
         depth: parsedDepth,
         location: {
-          lat: pendingAddCoords.lat,
-          lng: pendingAddCoords.lng,
+          lat: createPlacementCoords.lat,
+          lng: createPlacementCoords.lng,
         },
       });
 
@@ -1949,7 +1960,7 @@ export default function SmartBinDashboard() {
                     <div className="space-y-1">
                       <label className="text-xs text-slate-500">Latitude</label>
                       <Input
-                        value={pendingAddCoords ? formatCoords(pendingAddCoords.lat) : "Not selected"}
+                        value={createPlacementCoords ? formatCoords(createPlacementCoords.lat) : "Not selected"}
                         readOnly
                         className="rounded-xl bg-white"
                       />
@@ -1957,11 +1968,16 @@ export default function SmartBinDashboard() {
                     <div className="space-y-1">
                       <label className="text-xs text-slate-500">Longitude</label>
                       <Input
-                        value={pendingAddCoords ? formatCoords(pendingAddCoords.lng) : "Not selected"}
+                        value={createPlacementCoords ? formatCoords(createPlacementCoords.lng) : "Not selected"}
                         readOnly
                         className="rounded-xl bg-white"
                       />
                     </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    {createLocationLocked
+                      ? "Location already provided by backend for this unverified bin. Manual placement is locked."
+                      : "No backend location yet. Use the clicked map position for this bin."}
                   </div>
                 </div>
               </div>
@@ -2058,6 +2074,11 @@ export default function SmartBinDashboard() {
                             <div className="text-[11px] text-slate-500">
                               Type {getTypeCategoryLabel(bin.type)} · Depth {bin.depth}cm
                             </div>
+                            <div className="mt-1 text-[11px] text-slate-500">
+                              {bin.hasLocation
+                                ? `Backend location · ${formatCoords(bin.lat)}, ${formatCoords(bin.lng)}`
+                                : "Map position required"}
+                            </div>
                           </div>
                           <div className="text-xs font-semibold text-slate-500">
                             Fill {bin.fill}% · Battery {bin.battery}%
@@ -2078,6 +2099,11 @@ export default function SmartBinDashboard() {
                     </div>
                     <div className="mt-1">
                       Status will move from <strong>Unverified</strong> to <strong>{statusLabels[createStatus]}</strong>.
+                    </div>
+                    <div className="mt-1">
+                      {createLocationLocked
+                        ? "Existing backend coordinates will be kept."
+                        : "The clicked map coordinates will be saved for this bin."}
                     </div>
                   </>
                 ) : (
@@ -2105,7 +2131,7 @@ export default function SmartBinDashboard() {
               variant="outline"
               className="rounded-full border-slate-200 bg-white"
               onClick={() => void handleConfirmCreateBin()}
-              disabled={!pendingAddCoords || !createSelectedBinId || createSaving}
+              disabled={!createPlacementCoords || !createSelectedBinId || createSaving}
             >
               {createSaving ? (
                 <>
