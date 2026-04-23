@@ -13,24 +13,24 @@ except Exception as e:
 
 class PredictionRequest(BaseModel):
     bin_id: str
-    history: List[List[float]] 
+    history: List[List[float]] # Format: [[day, fill, battery], ...]
 
 @app.post("/predict")
-async def predict_fill_level(request: PredictionRequest):
-    if len(request.history) != 168:
-        raise HTTPException(status_code=400, detail="History must contain exactly 168 hours of data.")
-
-    try:
-        input_data = np.array([request.history])
-        prediction = model.predict(input_data)
-        predicted_values = prediction[0].tolist()
-        
-        return {
-            "bin_id": request.bin_id,
-            "prediction_unit": "percentage_0_to_1",
-            "forecast_hours": 168,
-            "data": [round(val, 4) for val in predicted_values]
+async def get_monthly_prediction(request: PredictionRequest):
+    # On prend les 60 derniers jours envoyés par le backend
+    input_data = np.array([request.history[-60:]])
+    prediction = model.predict(input_data)
+    
+    reshaped_pred = prediction[0].reshape(30, 2)
+    fill_forecast = reshaped_pred[:, 0].tolist()
+    battery_forecast = reshaped_pred[:, 1].tolist()
+    
+    return {
+        "bin_id": request.bin_id,
+        "prediction_unit": "percentage_0_to_1",
+        "forecast_days": 30,
+        "data": {
+            "fill_level": [round(f, 4) for f in fill_forecast],
+            "battery_level": [round(b, 4) for b in battery_forecast]
         }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    }

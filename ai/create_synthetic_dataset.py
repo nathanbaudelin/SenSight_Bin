@@ -2,47 +2,43 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-def generate_bin_data(bin_id, days=30, interval_min=60):
-    start_date = datetime.now() - timedelta(days=days)
-    periods = (days * 24 * 60) // interval_min
-    timestamps = [start_date + timedelta(minutes=i * interval_min) for i in range(periods)]
-
+def generate_daily_bin_data(bin_id, years=2):
+    start_date = datetime.now() - timedelta(days=years*365)
+    timestamps = [start_date + timedelta(days=i) for i in range(years*365)]
+    
     data = []
     current_fill = np.random.uniform(0, 20)
+    current_battery = 100.0
     
     for ts in timestamps:
-        day_week = ts.weekday()
-        hour = ts.hour
-
-        if 8 <= hour <= 22:
-            hourly_growth = np.random.uniform(0.5, 2.0)
-        else:
-            hourly_growth = np.random.uniform(0.0, 0.4)
-
-        if day_week >= 4: 
-            hourly_growth *= 1.5
-            
-        current_fill += hourly_growth
-
-        if current_fill > 90 or (day_week in [1, 4] and hour == 6):
+        day_of_year = ts.timetuple().tm_yday
+        is_weekend = ts.weekday() >= 5
+        
+        # 1. Remplissage : Croissance quotidienne
+        growth = np.random.uniform(5, 12)
+        if is_weekend: growth *= 1.4 # Plus de déchets le weekend
+        current_fill += growth
+        
+        # Événement de collecte (tous les ~5 jours ou si > 90%)
+        if current_fill > 90 or (ts.weekday() == 2): # Collecte fixe le mercredi
             current_fill = np.random.uniform(0, 5)
-
-        fill_percent = min(max(current_fill, 0), 100)
-
-        noise = np.random.normal(0, 0.5)
-        fill_percent = min(max(fill_percent + noise, 0), 100)
+            
+        # 2. Batterie : Décharge quotidienne + Charge solaire
+        # Décharge : ~0.5% par jour + pic lors de la transmission
+        discharge = np.random.uniform(0.3, 0.7) 
+        # Solaire : Recharge si beau temps (simplifié par saison)
+        is_sunny = np.random.random() > 0.3 if 120 < day_of_year < 270 else np.random.random() > 0.6
+        recharge = np.random.uniform(0.2, 1.0) if is_sunny else 0
+        
+        current_battery = max(min(current_battery - discharge + recharge, 100), 0)
         
         data.append({
-            "timestamp": ts,
-            "bin_id": bin_id,
-            "fill_level": round(fill_percent, 2),
-            "day_of_week": day_week,
-            "hour": hour
+            "day": ts.timetuple().tm_yday,
+            "fill_level": round(min(current_fill, 100), 2),
+            "battery_level": round(current_battery, 2)
         })
         
     return pd.DataFrame(data)
 
-df_synthetic = generate_bin_data(bin_id="BCN-CT-001", days=60)
-print(df_synthetic.head(10))
-
-df_synthetic.to_csv("synthetic_waste_data.csv", index=False)
+df_daily = generate_daily_bin_data("BIN-001")
+df_daily.to_csv("daily_waste_battery_data.csv", index=False)

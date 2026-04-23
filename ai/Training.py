@@ -1,58 +1,33 @@
+import tensorflow as tf
 import pandas as pd
 import numpy as np
-import tensorflow as tf
+from tensorflow.keras import layers
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras import layers, Sequential
 
-# dataset load
-df = pd.read_csv("data/synthetic_waste_data.csv")
-
-# normalise data
+df = pd.read_csv("data/daily_waste_battery_data.csv")
 scaler = MinMaxScaler()
-df['fill_norm'] = scaler.fit_transform(df[['fill_level']])
+data_scaled = scaler.fit_transform(df[['day', 'fill_level', 'battery_level']])
 
-# create sliding window for 1 week data input and 1 week data output
-def create_sequences(data, window_size=168):
+def create_sequences(data, lookback=60, forecast=30):
     X, y = [], []
-    for i in range(len(data) - (2 * window_size)):
-        X.append(data[i : i + window_size])
-        y.append(data[i + window_size : i + (2 * window_size)])
+    for i in range(len(data) - lookback - forecast):
+        X.append(data[i : i + lookback])
+        # On prédit fill_level (index 1) et battery_level (index 2)
+        y.append(data[i + lookback : i + lookback + forecast, 1:3])
     return np.array(X), np.array(y)
 
-# features
-features = df[['fill_norm', 'day_of_week', 'hour']].values
-X, y = create_sequences(features)
+X, y = create_sequences(data_scaled)
+y_reshaped = y.reshape(y.shape[0], -1)
 
-# reshape on 168h to match 1 week worth of data
-y = y[:, :, 0] 
-
-# split dataset with 80% training and 20% testing
-split = int(0.8 * len(X))
-X_train, X_test = X[:split], X[split:]
-y_train, y_test = y[:split], y[split:]
-
-# model
-model = Sequential([
-    layers.Input(shape=(X_train.shape[1], X_train.shape[2])),
-    layers.LSTM(128, return_sequences=True),
-    layers.Dropout(0.2),
-    layers.LSTM(64),
-    layers.Dense(256, activation='relu'),
-    layers.Dense(168, activation='sigmoid') # Predicting 168 hours of fill in %
+# LSTM Multi-Output
+model = tf.keras.Sequential([
+    layers.Input(shape=(60, 3)),
+    layers.LSTM(100, return_sequences=True),
+    layers.LSTM(50),
+    layers.Dense(128, activation='relu'),
+    layers.Dense(60) # 30 jours * 2 valeurs (remplissage + batterie)
 ])
 
-model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-
-# training
-print("Starting training...")
-history = model.fit(
-    X_train, y_train,
-    epochs=20,
-    batch_size=32,
-    validation_data=(X_test, y_test),
-    verbose=1
-)
-
-# save 
-model.save("models/bin_predictor_v1.h5")
-print("Model trained and saved as models/bin_predictor_v1.h5")
+model.compile(optimizer='adam', loss='mse')
+model.fit(X, y_reshaped, epochs=30, batch_size=16)
+model.save("models/daily_bin_predictor.h5")
