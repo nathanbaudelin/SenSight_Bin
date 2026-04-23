@@ -1,121 +1,125 @@
+export type BinType =
+  | "general"
+  | "plastic"
+  | "paper"
+  | "glass"
+  | "organic"
+  | "metal"
+  | "electronic"
+  | "unknown";
+
+export type BinLifecycleStatus =
+  | "active"
+  | "inactive"
+  | "maintenance"
+  | "removed"
+  | "unverified";
+
+export type BinFillStatus = "low" | "medium" | "full";
+
+export type BackendBin = {
+  id: string;
+  device_uid?: string;
+  type?: BinType;
+  location?: {
+    lat: number;
+    lng: number;
+  };
+  depth: number;
+  filling_level: number;
+  battery_level: number;
+  status: BinLifecycleStatus;
+};
+
+export type BinUpdatePayload = {
+  type?: BinType;
+  location?: {
+    lat: number;
+    lng: number;
+  };
+  depth?: number;
+  filling_level?: number;
+  battery_level?: number;
+  status?: BinLifecycleStatus;
+};
+
 export type Bin = {
   id: string;
-  area: string;
+  deviceUid: string | null;
+  type: BinType;
+  status: BinLifecycleStatus;
+  depth: number;
+  fill: number;
+  battery: number;
   lat: number;
   lng: number;
-  fill: number;
+  hasLocation: boolean;
+  area: string;
   lastCollection: string;
-  deviceSsid: string | null;
   lastReading: string;
   notes: string;
 };
 
-export type BinStatus = "low" | "medium" | "full";
+export const BIN_TYPE_OPTIONS: BinType[] = [
+  "general",
+  "plastic",
+  "paper",
+  "glass",
+  "organic",
+  "metal",
+  "electronic",
+  "unknown",
+];
 
-export const getBinStatus = (fill: number): BinStatus => {
+export const CONFIGURABLE_BIN_STATUSES: BinLifecycleStatus[] = [
+  "active",
+  "inactive",
+  "maintenance",
+];
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const statusNotes: Record<BinLifecycleStatus, string> = {
+  active: "Operational bin",
+  inactive: "Temporarily disabled",
+  maintenance: "Maintenance required",
+  removed: "Removed from service",
+  unverified: "Detected by backend, pending map configuration",
+};
+
+export const getBinStatus = (fill: number): BinFillStatus => {
   if (fill >= 80) return "full";
   if (fill >= 50) return "medium";
   return "low";
 };
 
-export const initialBins: Bin[] = [
-  {
-    id: "BCN-CT-001",
-    area: "Placa Catalunya",
-    lat: 41.38702,
-    lng: 2.17006,
-    fill: 92,
-    lastCollection: "2h",
-    deviceSsid: "BIN_BCN_001",
-    lastReading: "just now",
-    notes: "Tourist zone, high traffic",
-  },
-  {
-    id: "BCN-GR-114",
-    area: "Passeig de Gracia",
-    lat: 41.39162,
-    lng: 2.16494,
-    fill: 81,
-    lastCollection: "8h",
-    deviceSsid: "BIN_BCN_014",
-    lastReading: "2 min ago",
-    notes: "Retail strip",
-  },
-  {
-    id: "BCN-SF-229",
-    area: "Sagrada Familia",
-    lat: 41.40363,
-    lng: 2.17436,
-    fill: 74,
-    lastCollection: "14h",
-    deviceSsid: "BIN_BCN_027",
-    lastReading: "3 min ago",
-    notes: "Busier on weekends",
-  },
-  {
-    id: "BCN-EL-412",
-    area: "El Raval",
-    lat: 41.37815,
-    lng: 2.16812,
-    fill: 0,
-    lastCollection: "5h",
-    deviceSsid: null,
-    lastReading: "awaiting connection",
-    notes: "Market day",
-  },
-  {
-    id: "BCN-BN-305",
-    area: "Barceloneta",
-    lat: 41.37962,
-    lng: 2.18964,
-    fill: 0,
-    lastCollection: "1d",
-    deviceSsid: null,
-    lastReading: "awaiting connection",
-    notes: "Seaside pedestrian zone",
-  },
-  {
-    id: "BCN-SM-188",
-    area: "Sant Marti",
-    lat: 41.41058,
-    lng: 2.19743,
-    fill: 36,
-    lastCollection: "9h",
-    deviceSsid: "BIN_BCN_036",
-    lastReading: "5 min ago",
-    notes: "Residential block",
-  },
-  {
-    id: "BCN-LC-077",
-    area: "Les Corts",
-    lat: 41.3874,
-    lng: 2.13023,
-    fill: 0,
-    lastCollection: "12h",
-    deviceSsid: null,
-    lastReading: "awaiting connection",
-    notes: "Office district",
-  },
-  {
-    id: "BCN-MJ-266",
-    area: "Montjuic",
-    lat: 41.36412,
-    lng: 2.15845,
-    fill: 0,
-    lastCollection: "6h",
-    deviceSsid: null,
-    lastReading: "awaiting connection",
-    notes: "Park entrance",
-  },
-  {
-    id: "BCN-PO-352",
-    area: "Poblenou",
-    lat: 41.39934,
-    lng: 2.20215,
-    fill: 22,
-    lastCollection: "4h",
-    deviceSsid: "BIN_BCN_052",
-    lastReading: "1 min ago",
-    notes: "Tech campus",
-  },
-];
+export const isBinMappable = (bin: Bin) =>
+  bin.hasLocation && bin.status !== "unverified" && bin.status !== "removed";
+
+export const mapBackendBinToBin = (source: BackendBin): Bin => {
+  const hasLocation =
+    typeof source.location?.lat === "number" && typeof source.location?.lng === "number";
+  const lat = hasLocation ? source.location!.lat : 0;
+  const lng = hasLocation ? source.location!.lng : 0;
+  const deviceUid =
+    typeof source.device_uid === "string" && source.device_uid.trim().length > 0
+      ? source.device_uid
+      : null;
+
+  return {
+    id: source.id,
+    deviceUid,
+    type: source.type ?? "unknown",
+    status: source.status,
+    depth: source.depth,
+    fill: clamp(Math.round(source.filling_level), 0, 100),
+    battery: clamp(Math.round(source.battery_level), 0, 100),
+    lat,
+    lng,
+    hasLocation,
+    area: hasLocation ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : "Position pending",
+    lastCollection: "n/a",
+    lastReading: "live API",
+    notes: statusNotes[source.status],
+  };
+};

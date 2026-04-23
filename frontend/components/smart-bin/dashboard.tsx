@@ -1,18 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Bell,
-  CheckCircle2,
+  CalendarDays,
+  Check,
   CircleAlert,
+  Clock3,
   ClipboardX,
+  Eye,
   Loader2,
-  Wifi,
-  WifiOff,
   MapPinned,
+  MousePointerClick,
   Move,
   Plus,
+  RefreshCcw,
   Route,
   TrendingDown,
   TrendingUp,
@@ -31,9 +34,24 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import type { Bin } from "./bin-data";
-import { getBinStatus, initialBins } from "./bin-data";
+import type {
+  BackendBin,
+  Bin,
+  BinLifecycleStatus,
+  BinType,
+  BinUpdatePayload,
+} from "./bin-data";
+import {
+  BIN_TYPE_OPTIONS,
+  CONFIGURABLE_BIN_STATUSES,
+  getBinStatus,
+  isBinMappable,
+  mapBackendBinToBin,
+} from "./bin-data";
 import type { BinMapProps } from "./bin-map";
+import PredictionForecastModal, {
+  type PredictionPayload,
+} from "./prediction-forecast-modal";
 import SmartNav from "./smart-nav";
 
 const BinMap = dynamic<BinMapProps>(() => import("./bin-map"), {
@@ -46,23 +64,88 @@ const BinMap = dynamic<BinMapProps>(() => import("./bin-map"), {
 const CENTER_BARCELONA = { lat: 41.3851, lng: 2.1734 };
 
 type FilterKey = "all" | "full" | "medium" | "low";
-
-type WifiNetwork = {
-  id: string;
-  ssid: string;
-  rssi: number;
-  secure: boolean;
-  channel: number;
-  distance: string;
-};
-
+type BinsListScope = "active" | "unverified";
+type MapTypeFilter =
+  | "all"
+  | "general"
+  | "plastic-metal"
+  | "paper"
+  | "glass"
+  | "organic"
+  | "electronic"
+  | "unknown";
 type PendingCoords = { lat: number; lng: number };
-type RouteStopPayload = { id: string; lat: number; lng: number };
-type SimulatedRoutePayload = {
+type DepotPayload = {
+  id: string;
+  name: string;
+  shortName: string;
+  address: string;
+  lat: number;
+  lng: number;
+};
+type RouteCandidatePayload = {
+  id: string;
+  lat: number;
+  lng: number;
+  fill: number;
+  distanceFromDepotKm: number;
+};
+type RouteStopPayload = {
+  id: string;
+  lat: number;
+  lng: number;
+  kind: "depot" | "bin";
+  label: string;
+  sequence: number | null;
+  fill?: number;
+};
+type PreparedRoutePayload = {
   routeId: string;
   provider: "simulated-backend";
   mode: "driving";
-  orderedStops: RouteStopPayload[];
+  typeFilter: MapTypeFilter;
+  scheduledStartAt: string;
+  depot: DepotPayload;
+  candidateBins: RouteCandidatePayload[];
+};
+type AlertTypeValue =
+  | "overflow"
+  | "low_battery"
+  | "sensor_failure"
+  | "sensor_inactive"
+  | "abnormal_fill_rate";
+type AlertStatusValue = "open" | "acknowledged" | "resolved";
+type AlertListFilter = "open" | "seen" | "old";
+
+type BackendAlert = {
+  id: string;
+  bin_id: string;
+  type: AlertTypeValue;
+  message: string;
+  status: AlertStatusValue;
+  timestamp: string;
+};
+
+type BackendPrediction = PredictionPayload;
+
+type ApiResponse<T> = {
+  status?: string;
+  message?: string;
+  data?: T;
+};
+
+type BinsPagePayload = {
+  data: BackendBin[] | BackendBin;
+  total: number;
+  page: number;
+  lastPage: number;
+};
+
+type AlertsPagePayload = {
+  data: BackendAlert[];
+  total: number;
+  page: number;
+  lastPage: number;
 };
 
 const FILTERS: { key: FilterKey; label: string }[] = [
@@ -71,39 +154,337 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "medium", label: "Medium 50-80%" },
   { key: "low", label: "Low < 50%" },
 ];
+const ALERT_FETCH_LIMIT = 100;
+const MAX_ROUTE_BINS = 4;
+const ROUTE_PRIORITY_FILL_THRESHOLD = 50;
+const ROUTE_DISTANCE_PENALTY_PER_KM = 4.5;
+const ROUTE_FULL_BIN_BONUS = 16;
 
-const formatCoords = (value: number) => value.toFixed(5);
-
-const statusLabel = (fill: number) => {
-  const status = getBinStatus(fill);
-  if (status === "full") return "Full";
-  if (status === "medium") return "Medium";
-  return "Low";
+// Based on the Barcelona municipal cleaning depot below Parc de Joan Miro.
+const BARCELONA_COLLECTION_DEPOT: DepotPayload = {
+  id: "DEPOT-JOAN-MIRO",
+  name: "Parc de Neteja de Joan Miro",
+  shortName: "Joan Miro depot",
+  address: "Carrer de la Diputacio, 9, Barcelona",
+  lat: 41.37781,
+  lng: 2.14747,
 };
 
-const statusBadgeClass = (fill: number) => {
+type CostMatrix = Array<Array<number | null>>;
+const ALERT_LIST_FILTER_OPTIONS: { value: AlertListFilter; label: string }[] = [
+  { value: "open", label: "Open" },
+  { value: "seen", label: "Seen" },
+  { value: "old", label: "Old alerts" },
+];
+
+const EDITABLE_BIN_STATUSES: BinLifecycleStatus[] = [
+  "active",
+  "inactive",
+  "maintenance",
+  "unverified",
+];
+
+const typeLabels: Record<BinType, string> = {
+  general: "General",
+  plastic: "Plastic",
+  paper: "Paper",
+  glass: "Glass",
+  organic: "Organic",
+  metal: "Metal",
+  electronic: "Electronic",
+  unknown: "Unknown",
+};
+
+const MAP_TYPE_FILTER_OPTIONS: { value: MapTypeFilter; label: string }[] = [
+  { value: "all", label: "All types" },
+  { value: "general", label: "General" },
+  { value: "plastic-metal", label: "Plastic & Metal" },
+  { value: "paper", label: "Paper" },
+  { value: "glass", label: "Glass" },
+  { value: "organic", label: "Organic" },
+  { value: "electronic", label: "Electronic" },
+  { value: "unknown", label: "Unknown" },
+];
+
+const ROUTE_TYPE_OPTIONS = MAP_TYPE_FILTER_OPTIONS.filter((option) => option.value !== "all");
+
+const getTypeCategory = (type: BinType): Exclude<MapTypeFilter, "all"> => {
+  if (type === "plastic" || type === "metal") return "plastic-metal";
+  return type;
+};
+
+const getTypeCategoryLabel = (type: BinType) => {
+  if (type === "plastic" || type === "metal") return "Plastic & Metal";
+  return typeLabels[type];
+};
+
+const matchesMapTypeFilter = (bin: Bin, mapTypeFilter: MapTypeFilter) => {
+  if (mapTypeFilter === "all") return true;
+  return getTypeCategory(bin.type) === mapTypeFilter;
+};
+
+const toDateTimeLocalInputValue = (date: Date) => {
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  const localDate = new Date(date.getTime() - offsetMs);
+  return localDate.toISOString().slice(0, 16);
+};
+
+const getCurrentDateInputValue = () => toDateTimeLocalInputValue(new Date()).slice(0, 10);
+const getCurrentTimeInputValue = () => toDateTimeLocalInputValue(new Date()).slice(11, 16);
+
+const formatDateTimeForDisplay = (raw: string | null) => {
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return parsed.toLocaleString();
+};
+
+const statusLabels: Record<BinLifecycleStatus, string> = {
+  active: "Active",
+  inactive: "Inactive",
+  maintenance: "Maintenance",
+  unverified: "Unverified",
+  removed: "Removed",
+};
+const alertTypeLabels: Record<AlertTypeValue, string> = {
+  overflow: "Overflow",
+  low_battery: "Low battery",
+  sensor_failure: "Sensor failure",
+  sensor_inactive: "Sensor inactive",
+  abnormal_fill_rate: "Abnormal fill rate",
+};
+
+const alertStatusLabels: Record<AlertStatusValue, string> = {
+  open: "Open",
+  acknowledged: "Seen",
+  resolved: "Resolved",
+};
+const alertCheckIconBaseClass =
+  "inline-flex size-8 min-h-8 min-w-8 shrink-0 items-center justify-center rounded-full aspect-square";
+
+const statusBadgeClass = (status: BinLifecycleStatus) => {
+  if (status === "active") return "bg-emerald-500/10 text-emerald-700 border-emerald-200";
+  if (status === "inactive") return "bg-slate-500/10 text-slate-700 border-slate-300";
+  if (status === "maintenance") return "bg-amber-500/10 text-amber-700 border-amber-200";
+  if (status === "unverified") return "bg-sky-500/10 text-sky-700 border-sky-200";
+  return "bg-rose-500/10 text-rose-700 border-rose-200";
+};
+
+const fillBarClass = (fill: number) => {
   const status = getBinStatus(fill);
-  if (status === "full") return "bg-rose-500/10 text-rose-700 border-rose-200";
-  if (status === "medium") return "bg-amber-500/10 text-amber-700 border-amber-200";
-  return "bg-emerald-500/10 text-emerald-700 border-emerald-200";
+  if (status === "full") return "bg-rose-500";
+  if (status === "medium") return "bg-amber-400";
+  return "bg-emerald-500";
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const formatCoords = (value: number) => value.toFixed(5);
+const toRadians = (value: number) => (value * Math.PI) / 180;
+const getDistanceBetweenPointsKm = (
+  start: { lat: number; lng: number },
+  end: { lat: number; lng: number }
+) => {
+  const earthRadiusKm = 6371;
+  const deltaLat = toRadians(end.lat - start.lat);
+  const deltaLng = toRadians(end.lng - start.lng);
+  const startLat = toRadians(start.lat);
+  const endLat = toRadians(end.lat);
 
-const rssiToPercent = (rssi: number) => clamp(Math.round((rssi + 100) * 2), 0, 100);
+  const haversine =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(startLat) * Math.cos(endLat) * Math.sin(deltaLng / 2) ** 2;
 
-const displayStatusLabel = (bin: Bin) => (bin.deviceSsid ? statusLabel(bin.fill) : "Offline");
+  return 2 * earthRadiusKm * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+};
+const formatDistanceKm = (distanceKm: number) =>
+  `${distanceKm.toLocaleString(undefined, {
+    minimumFractionDigits: distanceKm < 10 ? 1 : 0,
+    maximumFractionDigits: distanceKm < 10 ? 1 : 0,
+  })} km`;
+const formatDurationMinutes = (durationMinutes: number) => {
+  const roundedMinutes = Math.max(1, Math.round(durationMinutes));
+  if (roundedMinutes < 60) return `${roundedMinutes} min`;
 
-const displayStatusBadge = (bin: Bin) =>
-  bin.deviceSsid ? statusBadgeClass(bin.fill) : "bg-slate-200/60 text-slate-600 border-slate-200";
+  const hours = Math.floor(roundedMinutes / 60);
+  const minutes = roundedMinutes % 60;
+  return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
+};
+const getCoordinatesLabel = (bin: Bin) =>
+  bin.hasLocation ? `${formatCoords(bin.lat)}, ${formatCoords(bin.lng)}` : "Not configured";
+const parseApiMessage = (payload: unknown, fallback: string) => {
+  if (payload && typeof payload === "object" && "message" in payload) {
+    const message = (payload as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return fallback;
+};
+const toNumberOrNull = (rawValue: string) => {
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+const toBackendBinsList = (raw: BinsPagePayload["data"] | null | undefined): BackendBin[] => {
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") return [raw];
+  return [];
+};
+const toPredictionPayload = (raw: unknown): BackendPrediction | null => {
+  if (!raw || typeof raw !== "object") return null;
+
+  const candidate = raw as {
+    bin_id?: unknown;
+    prediction_unit?: unknown;
+    forecast_days?: unknown;
+    data?: unknown;
+  };
+
+  if (
+    typeof candidate.bin_id !== "string" ||
+    !Array.isArray(candidate.data) ||
+    !candidate.data.every((value) => typeof value === "number" && Number.isFinite(value))
+  ) {
+    return null;
+  }
+
+  return {
+    bin_id: candidate.bin_id,
+    prediction_unit:
+      typeof candidate.prediction_unit === "string" ? candidate.prediction_unit : undefined,
+    forecast_days:
+      typeof candidate.forecast_days === "number" && Number.isFinite(candidate.forecast_days)
+        ? candidate.forecast_days
+        : undefined,
+    data: candidate.data,
+  };
+};
+const isCostMatrix = (value: unknown): value is CostMatrix =>
+  Array.isArray(value) &&
+  value.every(
+    (row) =>
+      Array.isArray(row) &&
+      row.every((cell) => cell === null || (typeof cell === "number" && Number.isFinite(cell)))
+  );
+
+const readCostMatrixValue = (matrix: CostMatrix, fromIndex: number, toIndex: number) => {
+  const value = matrix[fromIndex]?.[toIndex];
+  return typeof value === "number" && Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
+};
+
+const computeLoopCost = (matrix: CostMatrix, order: number[]) => {
+  if (!order.length) return 0;
+
+  let cost = readCostMatrixValue(matrix, 0, order[0]);
+  for (let index = 1; index < order.length; index += 1) {
+    cost += readCostMatrixValue(matrix, order[index - 1], order[index]);
+  }
+  cost += readCostMatrixValue(matrix, order[order.length - 1], 0);
+
+  return cost;
+};
+
+const computeOptimalLoopOrder = (matrix: CostMatrix, stopCount: number) => {
+  const indexes = Array.from({ length: stopCount }, (_, index) => index + 1);
+  if (!indexes.length) return { bestOrder: [] as number[], bestCost: 0 };
+
+  let bestOrder = indexes;
+  let bestCost = Number.POSITIVE_INFINITY;
+
+  const visit = (remaining: number[], current: number[]) => {
+    if (!remaining.length) {
+      const currentCost = computeLoopCost(matrix, current);
+      if (currentCost < bestCost) {
+        bestCost = currentCost;
+        bestOrder = current;
+      }
+      return;
+    }
+
+    remaining.forEach((candidate, candidateIndex) => {
+      visit(
+        remaining.filter((_, index) => index !== candidateIndex),
+        [...current, candidate]
+      );
+    });
+  };
+
+  visit(indexes, []);
+  return { bestOrder, bestCost };
+};
+
+const buildFallbackCostMatrix = (points: Array<{ lat: number; lng: number }>): CostMatrix =>
+  points.map((sourcePoint, sourceIndex) =>
+    points.map((targetPoint, targetIndex) =>
+      sourceIndex === targetIndex ? 0 : getDistanceBetweenPointsKm(sourcePoint, targetPoint)
+    )
+  );
+
+const scoreBinForRoute = (bin: Bin) => {
+  const distanceFromDepotKm = getDistanceBetweenPointsKm(BARCELONA_COLLECTION_DEPOT, bin);
+  const urgencyBonus = bin.fill >= 80 ? ROUTE_FULL_BIN_BONUS : bin.fill >= 65 ? 8 : 0;
+  const score = bin.fill * 1.15 + urgencyBonus - distanceFromDepotKm * ROUTE_DISTANCE_PENALTY_PER_KM;
+
+  return { bin, distanceFromDepotKm, score };
+};
+
+const selectRouteCandidateBins = (routeEligibleBins: Bin[]): RouteCandidatePayload[] => {
+  const scoredBins = routeEligibleBins
+    .map(scoreBinForRoute)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        right.bin.fill - left.bin.fill ||
+        left.distanceFromDepotKm - right.distanceFromDepotKm
+    );
+
+  const priorityBins = scoredBins.filter(
+    ({ bin }) => bin.fill >= ROUTE_PRIORITY_FILL_THRESHOLD
+  );
+  const candidatePool = priorityBins.length > 0 ? priorityBins : scoredBins;
+
+  return candidatePool.slice(0, MAX_ROUTE_BINS).map(({ bin, distanceFromDepotKm }) => ({
+    id: bin.id,
+    lat: bin.lat,
+    lng: bin.lng,
+    fill: bin.fill,
+    distanceFromDepotKm,
+  }));
+};
+
+const getAlertCardToneClass = (alert: BackendAlert) => {
+  if (alert.status === "resolved") return "border-slate-200 bg-slate-50 text-slate-700";
+  if (alert.type === "overflow" || alert.type === "sensor_failure") {
+    return "border-rose-200 bg-rose-50/70 text-rose-700";
+  }
+  return "border-amber-200 bg-amber-50/70 text-amber-700";
+};
+
+const formatAlertTimeAgo = (rawTimestamp: string) => {
+  const parsed = new Date(rawTimestamp);
+  if (Number.isNaN(parsed.getTime())) return rawTimestamp;
+
+  const diffMs = Date.now() - parsed.getTime();
+  if (diffMs < 60_000) return "just now";
+
+  const diffMinutes = Math.floor(diffMs / 60_000);
+  if (diffMinutes < 60) return `${diffMinutes} min ago`;
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours} h ago`;
+
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays} d ago`;
+};
 
 const filterBins = (bins: Bin[], filter: FilterKey, query: string) => {
   const normalizedQuery = query.trim().toLowerCase();
   return bins.filter((bin) => {
+    const typeLabel = getTypeCategoryLabel(bin.type).toLowerCase();
     const matchesQuery =
       !normalizedQuery ||
       bin.id.toLowerCase().includes(normalizedQuery) ||
-      bin.area.toLowerCase().includes(normalizedQuery);
+      bin.type.toLowerCase().includes(normalizedQuery) ||
+      typeLabel.includes(normalizedQuery) ||
+      bin.status.toLowerCase().includes(normalizedQuery);
+
     if (!matchesQuery) return false;
     if (filter === "all") return true;
     if (filter === "full") return bin.fill >= 80;
@@ -113,133 +494,451 @@ const filterBins = (bins: Bin[], filter: FilterKey, query: string) => {
 };
 
 export default function SmartBinDashboard() {
-  const [bins, setBins] = useState<Bin[]>(initialBins);
+  const [bins, setBins] = useState<Bin[]>([]);
+  const [binsLoading, setBinsLoading] = useState(true);
+  const [binsRefreshing, setBinsRefreshing] = useState(false);
+  const [binsError, setBinsError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [savingBinId, setSavingBinId] = useState<string | null>(null);
+
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [mapTypeFilter, setMapTypeFilter] = useState<MapTypeFilter>("all");
+  const [binsListScope, setBinsListScope] = useState<BinsListScope>("active");
   const [query, setQuery] = useState("");
   const [addMode, setAddMode] = useState(false);
   const [moveMode, setMoveMode] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [wifiNetworks, setWifiNetworks] = useState<WifiNetwork[]>([]);
-  const [wifiScanning, setWifiScanning] = useState(false);
-  const [wifiError, setWifiError] = useState<string | null>(null);
-  const [wifiConnecting, setWifiConnecting] = useState<string | null>(null);
+
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [pendingAddCoords, setPendingAddCoords] = useState<PendingCoords | null>(null);
-  const [createArea, setCreateArea] = useState("");
-  const [createNotes, setCreateNotes] = useState("");
-  const [createLastCollection, setCreateLastCollection] = useState("new");
-  const [createNetworks, setCreateNetworks] = useState<WifiNetwork[]>([]);
-  const [createWifiScanning, setCreateWifiScanning] = useState(false);
-  const [createWifiError, setCreateWifiError] = useState<string | null>(null);
-  const [createWifiConnecting, setCreateWifiConnecting] = useState<string | null>(null);
-  const [createSelectedNetworkId, setCreateSelectedNetworkId] = useState<string | null>(null);
-  const [createLinkedSsid, setCreateLinkedSsid] = useState<string | null>(null);
-  const [createInitialFill, setCreateInitialFill] = useState<number | null>(null);
-  const [createLastReading, setCreateLastReading] = useState("awaiting connection");
+  const [createSelectedBinId, setCreateSelectedBinId] = useState<string | null>(null);
+  const [createType, setCreateType] = useState<BinType>("unknown");
+  const [createDepth, setCreateDepth] = useState("100");
+  const [createStatus, setCreateStatus] = useState<BinLifecycleStatus>("active");
   const [createFormError, setCreateFormError] = useState<string | null>(null);
+  const [createSaving, setCreateSaving] = useState(false);
+
   const [routePath, setRoutePath] = useState<{ lat: number; lng: number }[]>([]);
   const [routeStops, setRouteStops] = useState<RouteStopPayload[]>([]);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [lastGeneratedRouteId, setLastGeneratedRouteId] = useState<string | null>(null);
+  const [lastRouteTypeFilter, setLastRouteTypeFilter] = useState<MapTypeFilter>("all");
+  const [lastRouteScheduledStartAt, setLastRouteScheduledStartAt] = useState<string | null>(null);
+  const [routeMetrics, setRouteMetrics] = useState<{
+    distanceKm: number;
+    durationMinutes: number;
+  } | null>(null);
+  const [routeOrderExplanation, setRouteOrderExplanation] = useState<string | null>(null);
   const [routeDispatching, setRouteDispatching] = useState(false);
   const [routeDispatchStatus, setRouteDispatchStatus] = useState<string | null>(null);
+  const [routeDialogOpen, setRouteDialogOpen] = useState(false);
+  const [routeDialogTypeFilter, setRouteDialogTypeFilter] = useState<MapTypeFilter | "">("");
+  const [routeDialogDate, setRouteDialogDate] = useState("");
+  const [routeDialogTime, setRouteDialogTime] = useState("");
+  const [routeDialogError, setRouteDialogError] = useState<string | null>(null);
+  const [predictionDialogOpen, setPredictionDialogOpen] = useState(false);
+  const [predictionTargetId, setPredictionTargetId] = useState<string | null>(null);
+  const [predictionLoading, setPredictionLoading] = useState(false);
+  const [predictionError, setPredictionError] = useState<string | null>(null);
+  const [predictionCache, setPredictionCache] = useState<Record<string, BackendPrediction>>({});
+  const [alerts, setAlerts] = useState<BackendAlert[]>([]);
+  const [alertsFilter, setAlertsFilter] = useState<AlertListFilter>("open");
+  const [alertsCounts, setAlertsCounts] = useState<Record<AlertListFilter, number>>({
+    open: 0,
+    seen: 0,
+    old: 0,
+  });
+  const [alertsLoading, setAlertsLoading] = useState(true);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
+  const [updatingAlertId, setUpdatingAlertId] = useState<string | null>(null);
 
   const filteredBins = useMemo(() => filterBins(bins, filter, query), [bins, filter, query]);
-  const connectedBins = useMemo(
-    () => bins.filter((bin) => Boolean(bin.deviceSsid)).length,
+  const mapBins = useMemo(
+    () =>
+      filteredBins.filter(
+        (bin) => isBinMappable(bin) && matchesMapTypeFilter(bin, mapTypeFilter)
+      ),
+    [filteredBins, mapTypeFilter]
+  );
+  const binsForTable = useMemo(() => {
+    if (binsListScope === "active") {
+      return filteredBins.filter((bin) => bin.status === "active");
+    }
+    return filteredBins.filter((bin) => bin.status === "unverified");
+  }, [filteredBins, binsListScope]);
+  const unverifiedBins = useMemo(
+    () => bins.filter((bin) => bin.status === "unverified"),
     [bins]
   );
-  const averageFill = useMemo(() => {
-    if (!bins.length) return 0;
-    return Math.round(bins.reduce((sum, bin) => sum + bin.fill, 0) / bins.length);
-  }, [bins]);
-  const needsCollection = useMemo(() => bins.filter((bin) => bin.fill >= 80).length, [bins]);
-  const selectedBin = bins.find((bin) => bin.id === selectedId) ?? null;
-  const latestReading = useMemo(() => {
-    const connected = bins.filter((bin) => bin.deviceSsid);
-    if (!connected.length) return "No devices linked";
-    return connected
-      .map((bin) => bin.lastReading)
-      .find((reading) => Boolean(reading)) ?? "Live";
-  }, [bins]);
-  const nextBinIdPreview = useMemo(
-    () => `BCN-NW-${String(bins.length + 1).padStart(3, "0")}`,
-    [bins.length]
+
+  const connectedBins = useMemo(
+    () => bins.filter((bin) => bin.status === "active").length,
+    [bins]
   );
-  const createSelectedNetwork =
-    createNetworks.find((network) => network.id === createSelectedNetworkId) ?? null;
-  const routeStopsPreview = routeStops.map((stop) => stop.id);
+
+  const averageFill = useMemo(() => {
+    const binsForAverage = bins.filter((bin) => bin.status !== "unverified");
+    if (!binsForAverage.length) return 0;
+    return Math.round(
+      binsForAverage.reduce((sum, bin) => sum + bin.fill, 0) / binsForAverage.length
+    );
+  }, [bins]);
+
+  const needsCollection = useMemo(
+    () => bins.filter((bin) => bin.status === "active" && bin.fill >= 80).length,
+    [bins]
+  );
+
+  const selectedBin = useMemo(
+    () => bins.find((bin) => bin.id === selectedId) ?? null,
+    [bins, selectedId]
+  );
+  const selectedBinHasDeviceUid = !!selectedBin?.deviceUid;
+
+  const createSelectedBin = useMemo(
+    () => unverifiedBins.find((bin) => bin.id === createSelectedBinId) ?? null,
+    [unverifiedBins, createSelectedBinId]
+  );
+  const createPlacementCoords = useMemo(() => {
+    if (createSelectedBin?.hasLocation) {
+      return {
+        lat: createSelectedBin.lat,
+        lng: createSelectedBin.lng,
+      };
+    }
+
+    return pendingAddCoords;
+  }, [createSelectedBin, pendingAddCoords]);
+  const createLocationLocked = !!createSelectedBin?.hasLocation;
+  const predictionTargetBin = useMemo(
+    () => bins.find((bin) => bin.id === predictionTargetId) ?? null,
+    [bins, predictionTargetId]
+  );
+  const activePrediction = useMemo(
+    () => (predictionTargetId ? predictionCache[predictionTargetId] ?? null : null),
+    [predictionCache, predictionTargetId]
+  );
+
+  const latestReading = useMemo(() => {
+    if (binsLoading) return "Syncing...";
+    if (!bins.length) return "No data";
+    return "Live API";
+  }, [bins.length, binsLoading]);
+
+  const routeStopsPreview = routeStops.map((stop) => stop.label);
+  const routeCollectionPreview = routeStops
+    .filter((stop) => stop.kind === "bin")
+    .map((stop) => `#${stop.sequence ?? "-"} ${stop.id}`);
   const hasGeneratedRoute = routeStops.length > 0 && routePath.length > 1;
-
-  const resetCreateBinDraft = () => {
-    setCreateArea("");
-    setCreateNotes("");
-    setCreateLastCollection("new");
-    setCreateNetworks([]);
-    setCreateWifiScanning(false);
-    setCreateWifiError(null);
-    setCreateWifiConnecting(null);
-    setCreateSelectedNetworkId(null);
-    setCreateLinkedSsid(null);
-    setCreateInitialFill(null);
-    setCreateLastReading("awaiting connection");
-    setCreateFormError(null);
+  const routeScheduleLabel = useMemo(
+    () => formatDateTimeForDisplay(lastRouteScheduledStartAt),
+    [lastRouteScheduledStartAt]
+  );
+  const routeTypeLabel = useMemo(
+    () =>
+      MAP_TYPE_FILTER_OPTIONS.find((option) => option.value === lastRouteTypeFilter)?.label ??
+      "All types",
+    [lastRouteTypeFilter]
+  );
+  const routeStartStopLabel = routeStops[0]?.label ?? "-";
+  const routeEndStopLabel = routeStops[routeStops.length - 1]?.label ?? "-";
+  const routeMetricsLabel = useMemo(() => {
+    if (!routeMetrics) return null;
+    return `${formatDistanceKm(routeMetrics.distanceKm)} loop · ${formatDurationMinutes(routeMetrics.durationMinutes)}`;
+  }, [routeMetrics]);
+  const handleBinsListScopeChange = (scope: BinsListScope) => {
+    setBinsListScope((currentScope) => (currentScope === scope ? currentScope : scope));
   };
 
-  const buildSimulatedRoutePayload = (): SimulatedRoutePayload | null => {
-    const urgentBins = bins
-      .filter((bin) => bin.fill >= 50)
-      .sort((a, b) => b.fill - a.fill)
-      .slice(0, 4);
-    const fallbackBins = bins.slice(0, 4);
-    const selectedStops = (urgentBins.length >= 2 ? urgentBins : fallbackBins)
-      .slice(0, 4)
-      .map((bin) => ({ id: bin.id, lat: bin.lat, lng: bin.lng }));
+  const loadBins = useCallback(
+    async (silent = false) => {
+      if (silent) {
+        setBinsRefreshing(true);
+      } else {
+        setBinsLoading(true);
+      }
+      setBinsError(null);
 
-    if (selectedStops.length < 2) return null;
+      try {
+        const response = await fetch("/api/bins?limit=100", { cache: "no-store" });
+        const payload = (await response.json().catch(() => null)) as ApiResponse<BinsPagePayload> | null;
 
-    return {
-      routeId: `route-${Date.now()}`,
-      provider: "simulated-backend",
-      mode: "driving",
-      orderedStops: selectedStops,
-    };
-  };
+        if (!response.ok) {
+          throw new Error(parseApiMessage(payload, "Unable to load bins from backend."));
+        }
 
-  useEffect(() => {
-    setWifiError(null);
-    setWifiConnecting(null);
-    setWifiNetworks([]);
-  }, [selectedId]);
+        const backendBins = toBackendBinsList(payload?.data?.data);
+        const mapped = backendBins.map(mapBackendBinToBin);
+        setBins(mapped);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setBins((prev) =>
-        prev.map((bin) => {
-          if (!bin.deviceSsid) return bin;
-          const delta = Math.round(Math.random() * 10 - 5);
-          const nextFill = clamp(bin.fill + delta, 5, 98);
-          return {
-            ...bin,
-            fill: nextFill,
-            lastReading: new Date().toLocaleTimeString("en-US", {
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-            }),
-          };
-        })
+        setSelectedId((currentSelectedId) => {
+          if (!currentSelectedId) return currentSelectedId;
+          return mapped.some((bin) => bin.id === currentSelectedId) ? currentSelectedId : null;
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to load bins from backend.";
+        setBinsError(message);
+      } finally {
+        if (silent) {
+          setBinsRefreshing(false);
+        } else {
+          setBinsLoading(false);
+        }
+      }
+    },
+    []
+  );
+
+  const refreshSelectedBinFill = useCallback(async (binId: string) => {
+    try {
+      const response = await fetch(`/api/bins/${encodeURIComponent(binId)}`, {
+        cache: "no-store",
+      });
+      const payload = (await response.json().catch(() => null)) as ApiResponse<BackendBin> | null;
+
+      if (!response.ok || !payload?.data) return;
+
+      const latestFill = clamp(Math.round(payload.data.filling_level), 0, 100);
+      setBins((previousBins) =>
+        previousBins.map((bin) => (bin.id === binId ? { ...bin, fill: latestFill } : bin))
       );
-    }, 4000);
-
-    return () => clearInterval(interval);
+    } catch {
+      // Silent fail to avoid showing transient polling errors in the dashboard.
+    }
   }, []);
+
+  const loadPrediction = useCallback(
+    async (binId: string, force = false, signal?: AbortSignal) => {
+      if (!force && predictionCache[binId]) {
+        setPredictionError(null);
+        return;
+      }
+
+      setPredictionLoading(true);
+      setPredictionError(null);
+
+      try {
+        const response = await fetch(`/api/predictions/${encodeURIComponent(binId)}`, {
+          cache: "no-store",
+          signal,
+        });
+        const payload = (await response.json().catch(() => null)) as ApiResponse<BackendPrediction> | null;
+
+        if (!response.ok) {
+          throw new Error(parseApiMessage(payload, `Unable to load prediction for ${binId}.`));
+        }
+
+        const prediction = toPredictionPayload(payload?.data);
+        if (!prediction) {
+          throw new Error("Prediction payload is invalid.");
+        }
+
+        setPredictionCache((currentCache) => ({
+          ...currentCache,
+          [binId]: prediction,
+        }));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        const message =
+          error instanceof Error ? error.message : `Unable to load prediction for ${binId}.`;
+        setPredictionError(message);
+      } finally {
+        if (!signal?.aborted) {
+          setPredictionLoading(false);
+        }
+      }
+    },
+    [predictionCache]
+  );
+
+  const fetchAlertsByStatus = useCallback(
+    async (status: AlertStatusValue, limit = ALERT_FETCH_LIMIT) => {
+      const response = await fetch(
+        `/api/alerts?status=${encodeURIComponent(status)}&limit=${limit}`,
+        { cache: "no-store" }
+      );
+      const payload = (await response.json().catch(() => null)) as ApiResponse<AlertsPagePayload> | null;
+
+      if (!response.ok) {
+        throw new Error(parseApiMessage(payload, `Unable to load ${status} alerts.`));
+      }
+
+      const fetchedAlerts = Array.isArray(payload?.data?.data) ? payload.data.data : [];
+      const total = typeof payload?.data?.total === "number" ? payload.data.total : fetchedAlerts.length;
+      return { alerts: fetchedAlerts, total };
+    },
+    []
+  );
+
+  const loadAlerts = useCallback(
+    async (filterValue: AlertListFilter, silent = false) => {
+      if (!silent) setAlertsLoading(true);
+      setAlertsError(null);
+
+      try {
+        const [openCountPayload, seenCountPayload, resolvedCountPayload] = await Promise.all([
+          fetchAlertsByStatus("open", 1),
+          fetchAlertsByStatus("acknowledged", 1),
+          fetchAlertsByStatus("resolved", 1),
+        ]);
+
+        setAlertsCounts({
+          open: openCountPayload.total,
+          seen: seenCountPayload.total,
+          old: resolvedCountPayload.total,
+        });
+
+        let fetchedAlerts: BackendAlert[] = [];
+
+        if (filterValue === "open") {
+          const payload = await fetchAlertsByStatus("open");
+          fetchedAlerts = payload.alerts;
+        } else if (filterValue === "seen") {
+          const payload = await fetchAlertsByStatus("acknowledged");
+          fetchedAlerts = payload.alerts;
+        } else {
+          const payload = await fetchAlertsByStatus("resolved");
+          fetchedAlerts = payload.alerts
+            .sort((left, right) => {
+              const leftTimestamp = new Date(left.timestamp).getTime();
+              const rightTimestamp = new Date(right.timestamp).getTime();
+              const safeLeft = Number.isNaN(leftTimestamp) ? 0 : leftTimestamp;
+              const safeRight = Number.isNaN(rightTimestamp) ? 0 : rightTimestamp;
+              return safeRight - safeLeft;
+            });
+        }
+
+        setAlerts(fetchedAlerts);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to load alerts from backend.";
+        setAlertsError(message);
+      } finally {
+        if (!silent) setAlertsLoading(false);
+      }
+    },
+    [fetchAlertsByStatus]
+  );
+
+  const handleMarkAlertAsSeen = useCallback(
+    async (alertId: string) => {
+      setUpdatingAlertId(alertId);
+      setAlertsError(null);
+
+      try {
+        const response = await fetch(`/api/alerts/${encodeURIComponent(alertId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "acknowledged" as AlertStatusValue }),
+        });
+
+        const payload = (await response.json().catch(() => null)) as ApiResponse<unknown> | null;
+
+        if (!response.ok) {
+          throw new Error(parseApiMessage(payload, `Unable to update alert ${alertId}.`));
+        }
+
+        await loadAlerts(alertsFilter, true);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : `Unable to update alert ${alertId}.`;
+        setAlertsError(message);
+      } finally {
+        setUpdatingAlertId(null);
+      }
+    },
+    [alertsFilter, loadAlerts]
+  );
+
+  useEffect(() => {
+    void loadBins();
+
+    const refreshInterval = setInterval(() => {
+      void loadBins(true);
+    }, 30000);
+
+    return () => clearInterval(refreshInterval);
+  }, [loadBins]);
+
+  useEffect(() => {
+    if (!selectedId || !selectedBinHasDeviceUid) return;
+
+    void refreshSelectedBinFill(selectedId);
+
+    const refreshInterval = setInterval(() => {
+      void refreshSelectedBinFill(selectedId);
+    }, 5000);
+
+    return () => clearInterval(refreshInterval);
+  }, [refreshSelectedBinFill, selectedBinHasDeviceUid, selectedId]);
+
+  useEffect(() => {
+    void loadAlerts(alertsFilter);
+
+    const refreshInterval = setInterval(() => {
+      void loadAlerts(alertsFilter, true);
+    }, 30000);
+
+    return () => clearInterval(refreshInterval);
+  }, [alertsFilter, loadAlerts]);
+
+  useEffect(() => {
+    if (!createDialogOpen) return;
+
+    if (!unverifiedBins.length) {
+      setCreateSelectedBinId(null);
+      return;
+    }
+
+    setCreateSelectedBinId((current) => {
+      if (current && unverifiedBins.some((bin) => bin.id === current)) return current;
+      return unverifiedBins[0].id;
+    });
+  }, [createDialogOpen, unverifiedBins]);
+
+  useEffect(() => {
+    if (!createDialogOpen || !createSelectedBin) return;
+
+    setCreateType(createSelectedBin.type);
+    setCreateDepth(String(createSelectedBin.depth));
+    setCreateStatus(
+      createSelectedBin.status === "inactive" || createSelectedBin.status === "maintenance"
+        ? createSelectedBin.status
+        : "active"
+    );
+  }, [createDialogOpen, createSelectedBin]);
+
+  useEffect(() => {
+    if (!routeDialogOpen) return;
+    if (!routeDialogDate) {
+      setRouteDialogDate(getCurrentDateInputValue());
+    }
+    if (!routeDialogTime) {
+      setRouteDialogTime(getCurrentTimeInputValue());
+    }
+  }, [routeDialogDate, routeDialogOpen, routeDialogTime]);
+
+  useEffect(() => {
+    if (!predictionDialogOpen || !predictionTargetId) return;
+
+    const controller = new AbortController();
+    void loadPrediction(predictionTargetId, false, controller.signal);
+
+    return () => controller.abort();
+  }, [loadPrediction, predictionDialogOpen, predictionTargetId]);
+
+  const resetCreateDraft = () => {
+    setCreateSelectedBinId(null);
+    setCreateType("unknown");
+    setCreateDepth("100");
+    setCreateStatus("active");
+    setCreateFormError(null);
+    setCreateSaving(false);
+  };
 
   const handleAddBin = (coords: { lat: number; lng: number }) => {
     setPendingAddCoords(coords);
-    resetCreateBinDraft();
+    setCreateFormError(null);
     setCreateDialogOpen(true);
     setAddMode(false);
     setMoveMode(false);
@@ -249,114 +948,335 @@ export default function SmartBinDashboard() {
     setCreateDialogOpen(open);
     if (!open) {
       setPendingAddCoords(null);
-      resetCreateBinDraft();
+      resetCreateDraft();
     }
   };
 
-  const handleCreateWifiScan = async () => {
-    setCreateWifiScanning(true);
-    setCreateWifiError(null);
+  const updateSelectedBin = (patch: Partial<Bin>) => {
+    if (!selectedBin) return;
+
+    setBins((previousBins) =>
+      previousBins.map((bin) => {
+        if (bin.id !== selectedBin.id) return bin;
+
+        const next = { ...bin, ...patch };
+
+        if ("lat" in patch || "lng" in patch || "hasLocation" in patch) {
+          const hasLocation =
+            typeof next.lat === "number" &&
+            Number.isFinite(next.lat) &&
+            typeof next.lng === "number" &&
+            Number.isFinite(next.lng) &&
+            next.hasLocation;
+
+          next.hasLocation = hasLocation;
+          next.area = hasLocation ? `${next.lat.toFixed(4)}, ${next.lng.toFixed(4)}` : "Position pending";
+        }
+
+        next.fill = clamp(next.fill, 0, 100);
+        next.battery = clamp(next.battery, 0, 100);
+
+        return next;
+      })
+    );
+  };
+
+  const persistBinPatch = useCallback(
+    async (binId: string, payload: BinUpdatePayload) => {
+      setSavingBinId(binId);
+      setMutationError(null);
+
+      try {
+        const response = await fetch(`/api/bins/${encodeURIComponent(binId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const data = (await response.json().catch(() => null)) as ApiResponse<unknown> | null;
+
+        if (!response.ok) {
+          throw new Error(parseApiMessage(data, `Unable to update bin ${binId}.`));
+        }
+
+        await loadBins(true);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : `Unable to update bin ${binId}.`;
+        setMutationError(message);
+        throw error;
+      } finally {
+        setSavingBinId(null);
+      }
+    },
+    [loadBins]
+  );
+
+  const handleConfirmCreateBin = async () => {
+    if (!createPlacementCoords) {
+      setCreateFormError("Bin position not found. Click on the map again.");
+      return;
+    }
+
+    if (!createSelectedBinId) {
+      setCreateFormError("No unverified bin available to configure.");
+      return;
+    }
+
+    const parsedDepth = toNumberOrNull(createDepth);
+    if (parsedDepth === null || parsedDepth <= 0) {
+      setCreateFormError("Depth must be a positive number.");
+      return;
+    }
+
+    setCreateSaving(true);
     setCreateFormError(null);
+
     try {
-      const response = await fetch("/api/wifi/scan", { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error("Scan failed");
-      }
-      const data = await response.json();
-      const networks = Array.isArray(data.networks) ? data.networks : [];
-      setCreateNetworks(networks);
-      if (networks.length) {
-        setCreateSelectedNetworkId((prev) => prev ?? networks[0].id);
-      }
-    } catch (error) {
-      setCreateWifiError("Unable to scan ESP32 WiFi networks.");
+      await persistBinPatch(createSelectedBinId, {
+        type: createType,
+        status: createStatus,
+        depth: parsedDepth,
+        location: {
+          lat: createPlacementCoords.lat,
+          lng: createPlacementCoords.lng,
+        },
+      });
+
+      setSelectedId(createSelectedBinId);
+      handleCreateDialogChange(false);
+    } catch {
+      setCreateFormError("Unable to configure this bin right now.");
     } finally {
-      setCreateWifiScanning(false);
+      setCreateSaving(false);
     }
   };
 
-  const handleCreateWifiConnect = async () => {
-    if (!createSelectedNetwork) {
-      setCreateFormError("Select an ESP32 network before connecting.");
-      return;
-    }
-    setCreateWifiConnecting(createSelectedNetwork.ssid);
-    setCreateWifiError(null);
-    setCreateFormError(null);
+  const handleDeleteSelected = async () => {
+    if (!selectedBin) return;
+
+    setSavingBinId(selectedBin.id);
+    setMutationError(null);
+
     try {
-      const response = await fetch("/api/wifi/connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ssid: createSelectedNetwork.ssid }),
+      const response = await fetch(`/api/bins/${encodeURIComponent(selectedBin.id)}`, {
+        method: "DELETE",
       });
+      const payload = (await response.json().catch(() => null)) as ApiResponse<unknown> | null;
+
       if (!response.ok) {
-        throw new Error("Connection failed");
+        throw new Error(parseApiMessage(payload, `Unable to delete bin ${selectedBin.id}.`));
       }
-      const data = (await response.json().catch(() => null)) as
-        | { fill?: number; lastReading?: string }
-        | null;
-      const now = new Date().toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      });
-      setCreateLinkedSsid(createSelectedNetwork.ssid);
-      setCreateInitialFill(
-        typeof data?.fill === "number"
-          ? clamp(Math.round(data.fill), 0, 100)
-          : clamp(Math.round(Math.random() * 60 + 20), 5, 98)
-      );
-      setCreateLastReading(data?.lastReading ?? now);
+
+      setDeleteDialogOpen(false);
+      setMoveMode(false);
+      setSelectedId(null);
+      await loadBins(true);
     } catch (error) {
-      setCreateWifiError("Unable to connect to the selected ESP32.");
+      const message = error instanceof Error ? error.message : `Unable to delete bin ${selectedBin.id}.`;
+      setMutationError(message);
     } finally {
-      setCreateWifiConnecting(null);
+      setSavingBinId(null);
     }
   };
 
-  const handleConfirmCreateBin = () => {
-    if (!pendingAddCoords) {
-      setCreateFormError("Bin position not found. Click again on the map.");
-      return;
-    }
-    if (!createArea.trim()) {
-      setCreateFormError("Area is required.");
-      return;
-    }
-    if (!createLinkedSsid) {
-      setCreateFormError("You must connect an ESP32 over WiFi before creating the bin.");
-      return;
-    }
+  const handleSaveSelectedBin = async () => {
+    if (!selectedBin) return;
 
-    const newBin: Bin = {
-      id: nextBinIdPreview,
-      area: createArea.trim(),
-      lat: pendingAddCoords.lat,
-      lng: pendingAddCoords.lng,
-      fill: createInitialFill ?? 0,
-      lastCollection: createLastCollection.trim() || "new",
-      deviceSsid: createLinkedSsid,
-      lastReading: createLastReading,
-      notes: createNotes.trim() || "ESP32 linked during setup",
+    const payload: BinUpdatePayload = {
+      type: selectedBin.type,
+      status: selectedBin.status,
+      depth: selectedBin.depth,
+      battery_level: clamp(Math.round(selectedBin.battery), 0, 100),
     };
+    if (!selectedBin.deviceUid) {
+      payload.filling_level = clamp(Math.round(selectedBin.fill), 0, 100);
+    }
 
-    setBins((prev) => [newBin, ...prev]);
-    setSelectedId(newBin.id);
-    handleCreateDialogChange(false);
+    if (selectedBin.hasLocation) {
+      payload.location = {
+        lat: selectedBin.lat,
+        lng: selectedBin.lng,
+      };
+    }
+
+    await persistBinPatch(selectedBin.id, payload);
   };
 
-  const handleGenerateRoute = async () => {
+  const handleMoveBin = (coords: { lat: number; lng: number }) => {
+    if (!selectedBin) return;
+
+    updateSelectedBin({
+      lat: coords.lat,
+      lng: coords.lng,
+      hasLocation: true,
+    });
+    setMoveMode(false);
+  };
+
+  const handleCoordChange = (field: "lat" | "lng", rawValue: string) => {
+    if (!selectedBin) return;
+
+    const parsed = toNumberOrNull(rawValue);
+    if (parsed === null) return;
+
+    if (field === "lat") {
+      updateSelectedBin({ lat: parsed, hasLocation: true });
+      return;
+    }
+
+    updateSelectedBin({ lng: parsed, hasLocation: true });
+  };
+
+  const handleSelectBin = (id: string) => {
+    setSelectedId(id);
+    setMoveMode(false);
+  };
+
+  const handleOpenPredictionDialog = (bin: Bin) => {
+    setSelectedId(bin.id);
+    setPredictionTargetId(bin.id);
+    setPredictionError(null);
+    setPredictionDialogOpen(true);
+  };
+
+  const handleRetryPrediction = () => {
+    if (!predictionTargetId) return;
+    void loadPrediction(predictionTargetId, true);
+  };
+
+  const handlePredictionDialogChange = (open: boolean) => {
+    setPredictionDialogOpen(open);
+    if (!open) {
+      setPredictionLoading(false);
+      setPredictionError(null);
+    }
+  };
+
+  const buildPreparedRoutePayload = (
+    typeFilter: MapTypeFilter,
+    scheduledStartAt: string
+  ): PreparedRoutePayload | null => {
+    const routeEligibleBins = bins.filter(
+      (bin) =>
+        isBinMappable(bin) &&
+        bin.status === "active" &&
+        matchesMapTypeFilter(bin, typeFilter)
+    );
+    const candidateBins = selectRouteCandidateBins(routeEligibleBins);
+
+    if (!candidateBins.length) return null;
+
+    return {
+      routeId: `route-${Date.now()}`,
+      provider: "simulated-backend",
+      mode: "driving",
+      typeFilter,
+      scheduledStartAt,
+      depot: BARCELONA_COLLECTION_DEPOT,
+      candidateBins,
+    };
+  };
+
+  const handleGenerateRoute = async (typeFilter: MapTypeFilter, scheduledStartAt: string) => {
     setRouteLoading(true);
     setRouteError(null);
     setRouteDispatchStatus(null);
+
     try {
-      // Simulated backend response: ordered bins to visit + coordinates.
-      const simulatedPayload = buildSimulatedRoutePayload();
-      if (!simulatedPayload) {
-        throw new Error("Not enough bins to generate a route.");
+      const preparedPayload = buildPreparedRoutePayload(typeFilter, scheduledStartAt);
+      if (!preparedPayload) {
+        throw new Error("No mapped active bins available for this type filter.");
       }
 
-      const osrmCoordinates = simulatedPayload.orderedStops
+      const optimizationPoints = [
+        { lat: preparedPayload.depot.lat, lng: preparedPayload.depot.lng },
+        ...preparedPayload.candidateBins.map((bin) => ({ lat: bin.lat, lng: bin.lng })),
+      ];
+
+      let bestOrder: number[] = [];
+      let firstLegDistanceKm: number | null = null;
+      let optimizationLabel = "shortest road loop";
+
+      try {
+        const tableCoordinates = optimizationPoints
+          .map((point) => `${point.lng},${point.lat}`)
+          .join(";");
+        const tableResponse = await fetch(
+          `https://router.project-osrm.org/table/v1/driving/${tableCoordinates}?annotations=duration,distance`,
+          { cache: "no-store" }
+        );
+
+        if (!tableResponse.ok) {
+          throw new Error("Routing matrix unavailable");
+        }
+
+        const tableData = (await tableResponse.json().catch(() => null)) as
+          | { durations?: unknown; distances?: unknown }
+          | null;
+
+        if (!isCostMatrix(tableData?.durations) || !isCostMatrix(tableData?.distances)) {
+          throw new Error("Invalid routing matrix");
+        }
+
+        const optimizedLoop = computeOptimalLoopOrder(
+          tableData.durations,
+          preparedPayload.candidateBins.length
+        );
+        bestOrder = optimizedLoop.bestOrder;
+
+        const firstLegMeters =
+          bestOrder.length > 0
+            ? readCostMatrixValue(tableData.distances, 0, bestOrder[0])
+            : Number.POSITIVE_INFINITY;
+        firstLegDistanceKm = Number.isFinite(firstLegMeters) ? firstLegMeters / 1000 : null;
+      } catch {
+        const fallbackMatrix = buildFallbackCostMatrix(optimizationPoints);
+        const optimizedLoop = computeOptimalLoopOrder(
+          fallbackMatrix,
+          preparedPayload.candidateBins.length
+        );
+        bestOrder = optimizedLoop.bestOrder;
+
+        const fallbackFirstLegKm =
+          bestOrder.length > 0
+            ? readCostMatrixValue(fallbackMatrix, 0, bestOrder[0])
+            : Number.POSITIVE_INFINITY;
+        firstLegDistanceKm = Number.isFinite(fallbackFirstLegKm) ? fallbackFirstLegKm : null;
+        optimizationLabel = "shortest approximate loop";
+      }
+
+      const orderedStops: RouteStopPayload[] = [
+        {
+          id: preparedPayload.depot.id,
+          lat: preparedPayload.depot.lat,
+          lng: preparedPayload.depot.lng,
+          kind: "depot",
+          label: preparedPayload.depot.shortName,
+          sequence: null,
+        },
+        ...bestOrder.map((matrixIndex, routeIndex) => {
+          const currentBin = preparedPayload.candidateBins[matrixIndex - 1];
+          return {
+            id: currentBin.id,
+            lat: currentBin.lat,
+            lng: currentBin.lng,
+            kind: "bin" as const,
+            label: currentBin.id,
+            sequence: routeIndex + 1,
+            fill: currentBin.fill,
+          };
+        }),
+        {
+          id: preparedPayload.depot.id,
+          lat: preparedPayload.depot.lat,
+          lng: preparedPayload.depot.lng,
+          kind: "depot",
+          label: preparedPayload.depot.shortName,
+          sequence: null,
+        },
+      ];
+
+      const osrmCoordinates = orderedStops
         .map((stop) => `${stop.lng},${stop.lat}`)
         .join(";");
 
@@ -386,16 +1306,74 @@ export default function SmartBinDashboard() {
         throw new Error("Empty route path");
       }
 
+      const routeDistanceMeters = data?.routes?.[0]?.distance;
+      const routeDurationSeconds = data?.routes?.[0]?.duration;
+      const firstCollectionStop = orderedStops.find((stop) => stop.kind === "bin") ?? null;
+
       setRoutePath(path);
-      setRouteStops(simulatedPayload.orderedStops);
-      setLastGeneratedRouteId(simulatedPayload.routeId);
+      setRouteStops(orderedStops);
+      setLastGeneratedRouteId(preparedPayload.routeId);
+      setLastRouteTypeFilter(preparedPayload.typeFilter);
+      setLastRouteScheduledStartAt(preparedPayload.scheduledStartAt);
+      setRouteMetrics(
+        typeof routeDistanceMeters === "number" && typeof routeDurationSeconds === "number"
+          ? {
+              distanceKm: routeDistanceMeters / 1000,
+              durationMinutes: routeDurationSeconds / 60,
+            }
+          : null
+      );
+      setRouteOrderExplanation(
+        firstCollectionStop
+          ? `${firstCollectionStop.id} is stop #1 because the truck now leaves from ${preparedPayload.depot.shortName} and this order gives the ${optimizationLabel} from depot to depot${firstLegDistanceKm !== null ? `, with a first leg of about ${formatDistanceKm(firstLegDistanceKm)}` : ""}.`
+          : null
+      );
+      setRouteDialogOpen(false);
+      setRouteDialogError(null);
+      setMapTypeFilter(typeFilter);
     } catch (error) {
-      setRouteError("Unable to generate route right now.");
+      const message = error instanceof Error ? error.message : "Unable to generate route right now.";
+      setRouteError(message);
+      setRouteDialogError(message);
       setRoutePath([]);
       setRouteStops([]);
+      setLastGeneratedRouteId(null);
+      setLastRouteScheduledStartAt(null);
+      setRouteMetrics(null);
+      setRouteOrderExplanation(null);
     } finally {
       setRouteLoading(false);
     }
+  };
+
+  const openGenerateRouteDialog = () => {
+    setRouteDialogTypeFilter("");
+    setRouteDialogDate(getCurrentDateInputValue());
+    setRouteDialogTime(getCurrentTimeInputValue());
+    setRouteDialogError(null);
+    setRouteDialogOpen(true);
+  };
+
+  const handleConfirmGenerateRoute = async () => {
+    if (!routeDialogTypeFilter) {
+      setRouteDialogError("Select a bin type.");
+      return;
+    }
+
+    if (!routeDialogDate || !routeDialogTime) {
+      setRouteDialogError("Select a start date and time.");
+      return;
+    }
+
+    const routeDialogStartAt = `${routeDialogDate}T${routeDialogTime}`;
+    const parsedDate = new Date(routeDialogStartAt);
+    if (Number.isNaN(parsedDate.getTime())) {
+      setRouteDialogError("Invalid start date/time.");
+      return;
+    }
+
+    setRouteDialogError(null);
+    await handleGenerateRoute(routeDialogTypeFilter, routeDialogStartAt);
   };
 
   const handleCancelRoute = () => {
@@ -403,131 +1381,28 @@ export default function SmartBinDashboard() {
     setRouteStops([]);
     setRouteError(null);
     setLastGeneratedRouteId(null);
+    setLastRouteScheduledStartAt(null);
+    setRouteMetrics(null);
+    setRouteOrderExplanation(null);
     setRouteDispatchStatus(null);
   };
 
   const handleSendRouteToCollectionService = async () => {
     if (!lastGeneratedRouteId || routeStops.length === 0) return;
+
     setRouteDispatching(true);
     setRouteDispatchStatus(null);
+
     try {
-      // Simulated backend dispatch call
       await new Promise((resolve) => setTimeout(resolve, 900));
       setRouteDispatchStatus(
         `Mission sent to collection service for ${lastGeneratedRouteId}. Team is on the way.`
       );
-    } catch (error) {
+    } catch {
       setRouteDispatchStatus("Unable to send mission to collection service.");
     } finally {
       setRouteDispatching(false);
     }
-  };
-
-  const updateSelectedBin = (patch: Partial<Bin>) => {
-    if (!selectedBin) return;
-    setBins((prev) =>
-      prev.map((bin) => (bin.id === selectedBin.id ? { ...bin, ...patch } : bin))
-    );
-  };
-
-  const confirmDeleteSelected = () => {
-    if (!selectedBin) return;
-    setBins((prev) => prev.filter((bin) => bin.id !== selectedBin.id));
-    setSelectedId(null);
-    setMoveMode(false);
-    setDeleteDialogOpen(false);
-  };
-
-  const handleMoveBin = (coords: { lat: number; lng: number }) => {
-    if (!selectedBin) return;
-    updateSelectedBin({ lat: coords.lat, lng: coords.lng });
-    setMoveMode(false);
-  };
-
-  const handleCoordChange = (field: "lat" | "lng", rawValue: string) => {
-    if (!selectedBin) return;
-    const value = Number(rawValue);
-    if (Number.isNaN(value)) return;
-    updateSelectedBin({ [field]: value } as Partial<Bin>);
-  };
-
-  const handleSelectBin = (id: string) => {
-    setSelectedId(id);
-    setMoveMode(false);
-  };
-
-  const handleWifiScan = async () => {
-    setWifiScanning(true);
-    setWifiError(null);
-    try {
-      const response = await fetch("/api/wifi/scan", { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error("Scan failed");
-      }
-      const data = await response.json();
-      setWifiNetworks(Array.isArray(data.networks) ? data.networks : []);
-    } catch (error) {
-      setWifiError("Unable to scan WiFi networks.");
-    } finally {
-      setWifiScanning(false);
-    }
-  };
-
-  const handleWifiConnect = async (ssid: string) => {
-    if (!selectedBin) return;
-    setWifiConnecting(ssid);
-    setWifiError(null);
-    try {
-      const response = await fetch("/api/wifi/connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ssid }),
-      });
-      if (!response.ok) {
-        throw new Error("Connection failed");
-      }
-      updateSelectedBin({
-        deviceSsid: ssid,
-        fill: clamp(Math.round(Math.random() * 60 + 20), 5, 98),
-        lastReading: new Date().toLocaleTimeString("en-US", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        }),
-      });
-    } catch (error) {
-      setWifiError("Unable to connect to the selected bin.");
-    } finally {
-      setWifiConnecting(null);
-    }
-  };
-
-  const handleWifiDisconnect = () => {
-    if (!selectedBin) return;
-    updateSelectedBin({
-      deviceSsid: null,
-      fill: 0,
-      lastReading: "awaiting connection",
-    });
-  };
-
-  const alerts = bins
-    .filter((bin) => bin.fill >= 80)
-    .slice(0, 3)
-    .map((bin, index) => ({
-      id: `${bin.id}-${index}`,
-      title: `${bin.id} Full`,
-      time: `${(index + 1) * 4} min`,
-      body: `${bin.area} - ${bin.fill}% full`,
-      tone: "critical" as const,
-    }));
-
-  const supplementalAlert = {
-    id: "route-opt",
-    title: "Route optimization",
-    time: "20 min",
-    body: "7 bins need pickup in Eixample. Route saves 24% fuel.",
-    tone: "warning" as const,
   };
 
   return (
@@ -541,6 +1416,21 @@ export default function SmartBinDashboard() {
         </div>
 
         <div className="relative mx-auto flex max-w-7xl flex-col gap-10 px-6 pb-20 pt-10">
+          {(binsError || mutationError) && (
+            <div className="space-y-2">
+              {binsError && (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                  {binsError}
+                </div>
+              )}
+              {mutationError && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                  {mutationError}
+                </div>
+              )}
+            </div>
+          )}
+
           <section id="overview" className="space-y-4 scroll-mt-28">
             <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)] lg:items-start">
               <div className="space-y-4">
@@ -549,18 +1439,19 @@ export default function SmartBinDashboard() {
                   Active coverage - Barcelona
                 </div>
                 <h1 className="text-4xl font-semibold tracking-tight text-slate-900 md:text-5xl">
-                  Smart Waste Control Center
+                  SenSight Bin Control Center
                 </h1>
                 <p className="max-w-xl text-base text-slate-600 md:text-lg">
-                  IoT prototype for connected smart bins. Track fill levels, plan collections, and
-                  trigger optimized routes across the city.
+                  IoT prototype for connected smart bins. Track fill levels, manage statuses, and
+                  configure bins directly from the map.
                 </p>
               </div>
+
               <div className="w-full rounded-3xl border border-white/50 bg-white/70 p-5 shadow-lg backdrop-blur lg:max-w-sm lg:justify-self-end">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-sm text-slate-500">Connected bins</div>
-                    <div className="text-2xl font-semibold">{connectedBins} / {bins.length}</div>
+                    <div className="text-sm text-slate-500">Active bins</div>
+                    <div className="text-2xl font-semibold">{connectedBins}</div>
                   </div>
                   <div className="rounded-2xl bg-emerald-500/10 p-2.5 text-emerald-600">
                     <TrendingUp className="h-5 w-5" />
@@ -572,12 +1463,30 @@ export default function SmartBinDashboard() {
                     <span className="font-semibold text-slate-900">{latestReading}</span>
                   </div>
                   <div className="flex items-center justify-between gap-3">
-                    <span>AI load prediction</span>
-                    <span className="font-semibold text-slate-900">87% accuracy</span>
+                    <span>Unverified bins</span>
+                    <span className="font-semibold text-slate-900">{unverifiedBins.length}</span>
                   </div>
                   <div className="flex items-center justify-between gap-3">
-                    <span>Average collection time</span>
-                    <span className="font-semibold text-slate-900">23 min</span>
+                    <span>API refresh</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 rounded-full border-slate-200 bg-white px-3 text-xs"
+                      onClick={() => void loadBins(true)}
+                      disabled={binsRefreshing}
+                    >
+                      {binsRefreshing ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Refreshing
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCcw className="h-3.5 w-3.5" />
+                          Refresh
+                        </>
+                      )}
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -590,7 +1499,7 @@ export default function SmartBinDashboard() {
               <div className="mt-4 text-3xl font-semibold">{bins.length}</div>
               <div className="mt-2 flex items-center gap-2 text-xs text-emerald-600">
                 <TrendingUp className="h-3.5 w-3.5" />
-                +3 this week
+                Live from backend
               </div>
             </div>
             <div className="rounded-3xl border border-white/60 bg-white/80 p-6 shadow-lg backdrop-blur">
@@ -598,7 +1507,7 @@ export default function SmartBinDashboard() {
               <div className="mt-4 text-3xl font-semibold">{needsCollection}</div>
               <div className="mt-2 flex items-center gap-2 text-xs text-rose-600">
                 <TrendingUp className="h-3.5 w-3.5" />
-                +2 since yesterday
+                Fill level above 80%
               </div>
             </div>
             <div className="rounded-3xl border border-white/60 bg-white/80 p-6 shadow-lg backdrop-blur">
@@ -606,15 +1515,15 @@ export default function SmartBinDashboard() {
               <div className="mt-4 text-3xl font-semibold">{averageFill}%</div>
               <div className="mt-2 flex items-center gap-2 text-xs text-emerald-600">
                 <TrendingDown className="h-3.5 w-3.5" />
-                -4% this week
+                Unverified bins excluded
               </div>
             </div>
             <div className="rounded-3xl border border-white/60 bg-white/80 p-6 shadow-lg backdrop-blur">
-              <div className="text-sm text-slate-500">Monthly savings</div>
-              <div className="mt-4 text-3xl font-semibold">EUR 8,120</div>
-              <div className="mt-2 flex items-center gap-2 text-xs text-emerald-600">
+              <div className="text-sm text-slate-500">Unverified</div>
+              <div className="mt-4 text-3xl font-semibold">{unverifiedBins.length}</div>
+              <div className="mt-2 flex items-center gap-2 text-xs text-amber-600">
                 <TrendingUp className="h-3.5 w-3.5" />
-                +18% vs last month
+                Pending map setup
               </div>
             </div>
           </section>
@@ -625,7 +1534,10 @@ export default function SmartBinDashboard() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-xl font-semibold">Bin map</h2>
-                    <p className="text-sm text-slate-500">Click a bin to see details.</p>
+                    <p className="text-sm text-slate-500">
+                      Click a bin to view and edit details. Collection routes depart from the
+                      Joan Miro municipal depot.
+                    </p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -643,12 +1555,26 @@ export default function SmartBinDashboard() {
                         {item.label}
                       </button>
                     ))}
+                    <select
+                      value={mapTypeFilter}
+                      onChange={(event) => setMapTypeFilter(event.target.value as MapTypeFilter)}
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 outline-none focus:border-slate-400"
+                    >
+                      {MAP_TYPE_FILTER_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="ml-2 flex flex-wrap items-center gap-2">
+                    <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-600">
+                      Truck depot · {BARCELONA_COLLECTION_DEPOT.shortName}
+                    </div>
                     <Button
                       onClick={() =>
-                        setAddMode((prev) => {
-                          const next = !prev;
+                        setAddMode((previous) => {
+                          const next = !previous;
                           if (next) setMoveMode(false);
                           return next;
                         })
@@ -660,7 +1586,7 @@ export default function SmartBinDashboard() {
                       )}
                     >
                       <Plus className="h-4 w-4" />
-                      {addMode ? "Add mode active" : "Add a bin"}
+                      {addMode ? "Add mode active" : "Place bin"}
                     </Button>
                     <Button
                       size="sm"
@@ -671,7 +1597,7 @@ export default function SmartBinDashboard() {
                           ? "border border-amber-400 bg-white text-amber-500 hover:bg-amber-50"
                           : "border-slate-200 bg-white"
                       )}
-                      onClick={handleGenerateRoute}
+                      onClick={openGenerateRouteDialog}
                       disabled={routeLoading}
                     >
                       <Route className="h-4 w-4" />
@@ -684,34 +1610,60 @@ export default function SmartBinDashboard() {
                   </div>
                 </div>
               </div>
+
               {(routeError || routeStopsPreview.length > 0 || routeLoading) && (
                 <div className="rounded-2xl border border-slate-200 bg-white/80 px-3 py-2 text-xs text-slate-600">
                   {routeError ? (
                     <span className="text-rose-600">{routeError}</span>
                   ) : routeLoading ? (
-                    <span>Simulating backend response and computing road route...</span>
+                    <span>Computing the depot-to-depot road loop...</span>
                   ) : (
                     <div className="space-y-2">
                       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-semibold text-slate-900">
-                              Route {lastGeneratedRouteId ?? ""}
-                            </span>
+                            <span className="font-semibold text-slate-900">Route {lastGeneratedRouteId ?? ""}</span>
                             <span className="text-slate-400">|</span>
                             <span>Start:</span>
-                            <span className="font-semibold text-slate-900">
-                              {routeStopsPreview[0] ?? "-"}
-                            </span>
+                            <span className="font-semibold text-slate-900">{routeStartStopLabel}</span>
                             <span className="text-slate-400">|</span>
                             <span>End:</span>
-                            <span className="font-semibold text-slate-900">
-                              {routeStopsPreview[routeStopsPreview.length - 1] ?? "-"}
-                            </span>
+                            <span className="font-semibold text-slate-900">{routeEndStopLabel}</span>
                             <span className="text-slate-400">|</span>
-                            <span>Order:</span>
+                            <span>Loop:</span>
                           </div>
                           <div className="font-semibold text-slate-900">{routeStopsPreview.join(" -> ")}</div>
+                          <div className="text-[11px] text-slate-500">
+                            Collection order:{" "}
+                            <span className="font-semibold text-slate-900">
+                              {routeCollectionPreview.join(" -> ")}
+                            </span>
+                          </div>
+                          {routeScheduleLabel && (
+                            <div className="text-[11px] text-slate-500">
+                              Start at:{" "}
+                              <span className="font-semibold text-slate-900">{routeScheduleLabel}</span>
+                              {" · "}
+                              Type: <span className="font-semibold text-slate-900">{routeTypeLabel}</span>
+                              {routeMetricsLabel && (
+                                <>
+                                  {" · "}
+                                  <span className="font-semibold text-slate-900">{routeMetricsLabel}</span>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          <div className="text-[11px] text-slate-500">
+                            Depot:{" "}
+                            <span className="font-semibold text-slate-900">
+                              {BARCELONA_COLLECTION_DEPOT.name}
+                            </span>
+                            {" · "}
+                            {BARCELONA_COLLECTION_DEPOT.address}
+                          </div>
+                          {routeOrderExplanation && (
+                            <div className="text-[11px] text-sky-700">{routeOrderExplanation}</div>
+                          )}
                         </div>
                         <div className="flex flex-wrap items-center gap-2 md:justify-end">
                           <Button
@@ -732,28 +1684,28 @@ export default function SmartBinDashboard() {
                         </div>
                       </div>
                       {routeDispatchStatus && (
-                        <div className="text-[11px] font-semibold text-emerald-700">
-                          {routeDispatchStatus}
-                        </div>
+                        <div className="text-[11px] font-semibold text-emerald-700">{routeDispatchStatus}</div>
                       )}
                     </div>
                   )}
                 </div>
               )}
+
               <div className="relative">
                 {addMode && (
                   <div className="absolute left-4 top-4 z-[1000] rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 shadow">
-                    Click the map to add a bin
+                    Click map to place an bin
                   </div>
                 )}
                 {moveMode && selectedBin && (
                   <div className="absolute left-4 top-14 z-[1000] rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-xs font-semibold text-slate-700 shadow">
-                    Click the map to reposition {selectedBin.id}
+                    Click map to reposition {selectedBin.id}
                   </div>
                 )}
                 <BinMap
-                  bins={filteredBins}
+                  bins={mapBins}
                   center={CENTER_BARCELONA}
+                  depot={BARCELONA_COLLECTION_DEPOT}
                   addMode={addMode}
                   moveMode={moveMode}
                   selectedId={selectedId}
@@ -764,6 +1716,7 @@ export default function SmartBinDashboard() {
                   onSelect={handleSelectBin}
                 />
               </div>
+
               <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
                 <div className="flex items-center gap-2">
                   <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
@@ -777,6 +1730,28 @@ export default function SmartBinDashboard() {
                   <span className="h-2.5 w-2.5 rounded-full bg-rose-500" />
                   <span>Full &gt; 80%</span>
                 </div>
+                <div className="flex items-center gap-2">
+                  <span className="h-2.5 w-2.5 rounded-full bg-slate-400" />
+                  <span>Inactive</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex h-4 w-4 items-center justify-center">
+                    <svg viewBox="0 0 20 20" className="h-4 w-4" aria-hidden="true">
+                      <polygon points="10,2 18,18 2,18" fill="#facc15" stroke="#ffffff" strokeWidth="1.2" />
+                      <text
+                        x="10"
+                        y="14"
+                        textAnchor="middle"
+                        fontSize="10"
+                        fontWeight="700"
+                        fill="#0f172a"
+                      >
+                        !
+                      </text>
+                    </svg>
+                  </span>
+                  <span>Maintenance</span>
+                </div>
               </div>
             </div>
 
@@ -785,51 +1760,194 @@ export default function SmartBinDashboard() {
                 id="alerts"
                 className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-lg backdrop-blur scroll-mt-28"
               >
-                <div className="flex items-center justify-between">
-                  <h3 className="text-base font-semibold">Recent alerts</h3>
-                  <Bell className="h-4 w-4 text-slate-500" />
-                </div>
-                <div className="mt-4 space-y-3">
-                  {[...alerts, supplementalAlert].map((alert) => (
-                    <div
-                      key={alert.id}
-                      className={cn(
-                        "rounded-2xl border p-3 text-sm",
-                        alert.tone === "critical"
-                          ? "border-rose-200 bg-rose-50/70 text-rose-700"
-                          : "border-amber-200 bg-amber-50/70 text-amber-700"
-                      )}
-                    >
-                      <div className="flex items-center gap-2">
-                        <CircleAlert className="h-4 w-4" />
-                        <span className="font-semibold">{alert.title}</span>
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">{alert.time}</div>
-                      <p className="mt-2 text-xs text-slate-600">{alert.body}</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-semibold">Recent alerts</h3>
+                      <Bell className="h-4 w-4 text-slate-500" />
                     </div>
-                  ))}
+                    <div className="mt-2 flex flex-wrap items-center gap-1">
+                      {ALERT_LIST_FILTER_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setAlertsFilter(option.value)}
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition",
+                            alertsFilter === option.value
+                              ? "border-slate-900 bg-slate-900 text-white"
+                              : "border-slate-200 bg-white text-slate-600"
+                          )}
+                        >
+                          <span>{option.label}</span>
+                          <span
+                            className={cn(
+                              "rounded-full border px-1.5 py-0.5 text-[10px] font-bold leading-none",
+                              alertsFilter === option.value
+                                ? "border-white/40 bg-white/20 text-white"
+                                : "border-slate-300 bg-slate-100 text-slate-700"
+                            )}
+                          >
+                            {alertsCounts[option.value]}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 rounded-full border-slate-200 bg-white px-2.5 text-xs"
+                    onClick={() => void loadAlerts(alertsFilter, true)}
+                    disabled={alertsLoading}
+                  >
+                    {alertsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
+
+                {alertsError && (
+                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                    {alertsError}
+                  </div>
+                )}
+
+                <div className="mt-4 max-h-[24rem] space-y-3 overflow-y-auto pr-1">
+                  {alertsLoading ? (
+                    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-5 text-center text-xs text-slate-500">
+                      <Loader2 className="mx-auto h-4 w-4 animate-spin text-slate-400" />
+                      <div className="mt-2">Loading alerts...</div>
+                    </div>
+                  ) : alerts.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-3 py-5 text-center text-xs text-slate-500">
+                      {alertsFilter === "open"
+                        ? "No open alert for now."
+                        : alertsFilter === "seen"
+                          ? "No seen alert yet."
+                          : "No old alert yet."}
+                    </div>
+                  ) : (
+                    alerts.map((alert) => (
+                      <div
+                        key={alert.id}
+                        className={cn("rounded-2xl border p-3 text-sm", getAlertCardToneClass(alert))}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <CircleAlert className="h-4 w-4" />
+                              <span className="font-semibold">{alertTypeLabels[alert.type]}</span>
+                              <span
+                                className={cn(
+                                  "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                                  alert.status === "resolved"
+                                    ? "border-slate-300 bg-white text-slate-600"
+                                    : "border-white/80 bg-white/70 text-current"
+                                )}
+                              >
+                                {alertStatusLabels[alert.status]}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {formatAlertTimeAgo(alert.timestamp)} · {alert.bin_id}
+                            </div>
+                            <p className="mt-2 text-xs text-slate-600">{alert.message}</p>
+                          </div>
+
+                          {alert.status === "open" ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleMarkAlertAsSeen(alert.id)}
+                              disabled={updatingAlertId === alert.id}
+                              className={cn(
+                                alertCheckIconBaseClass,
+                                "border border-slate-300 bg-white text-slate-400 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+                              )}
+                            >
+                              {updatingAlertId === alert.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Check className="h-4 w-4 stroke-[2.6]" />
+                              )}
+                            </button>
+                          ) : (
+                            <span
+                              className={cn(
+                                alertCheckIconBaseClass,
+                                "border border-emerald-300 bg-emerald-100 text-emerald-600 shadow-sm"
+                              )}
+                            >
+                              <Check className="h-4 w-4 stroke-[2.8]" />
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
               <div className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-lg backdrop-blur">
-                <h3 className="text-base font-semibold">Selected bin</h3>
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-base font-semibold">Selected bin</h3>
+                  {selectedBin ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-full border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                      onClick={() => handleOpenPredictionDialog(selectedBin)}
+                    >
+                      <Eye className="h-4 w-4" />
+                      See predictions
+                    </Button>
+                  ) : null}
+                </div>
                 {selectedBin ? (
                   <div className="mt-4 space-y-4 text-sm text-slate-600">
                     <div className="flex items-center justify-between">
                       <span>ID</span>
                       <span className="font-semibold text-slate-900">{selectedBin.id}</span>
                     </div>
-                    <div className="space-y-1">
-                      <label className="text-xs text-slate-500">Area</label>
-                      <input
-                        value={selectedBin.area}
-                        onChange={(event) => updateSelectedBin({ area: event.target.value })}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-                      />
+                    <div className="flex items-center justify-between">
+                      <span>Type</span>
+                      <span className="font-semibold text-slate-900">{typeLabels[selectedBin.type]}</span>
                     </div>
+
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <div className="space-y-1">
+                        <label className="text-xs text-slate-500">Type</label>
+                        <select
+                          value={selectedBin.type}
+                          onChange={(event) => updateSelectedBin({ type: event.target.value as BinType })}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        >
+                          {BIN_TYPE_OPTIONS.map((type) => (
+                            <option key={type} value={type}>
+                              {typeLabels[type]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-slate-500">Status</label>
+                        <select
+                          value={selectedBin.status}
+                          onChange={(event) =>
+                            updateSelectedBin({ status: event.target.value as BinLifecycleStatus })
+                          }
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        >
+                          {EDITABLE_BIN_STATUSES.map((status) => (
+                            <option key={status} value={status}>
+                              {statusLabels[status]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
                     <div className="grid grid-cols-2 gap-2">
                       <div className="space-y-1">
-                      <label className="text-xs text-slate-500">Latitude</label>
+                        <label className="text-xs text-slate-500">Latitude</label>
                         <input
                           type="number"
                           step="0.00001"
@@ -839,7 +1957,7 @@ export default function SmartBinDashboard() {
                         />
                       </div>
                       <div className="space-y-1">
-                      <label className="text-xs text-slate-500">Longitude</label>
+                        <label className="text-xs text-slate-500">Longitude</label>
                         <input
                           type="number"
                           step="0.00001"
@@ -849,155 +1967,96 @@ export default function SmartBinDashboard() {
                         />
                       </div>
                     </div>
-                    <div>
-                      <div className="mb-2 flex items-center justify-between">
-                        <span>Sensor fill level</span>
-                        <span className="font-semibold text-slate-900">
-                          {selectedBin.deviceSsid ? `${selectedBin.fill}%` : "Awaiting connection"}
-                        </span>
-                      </div>
-                      <div className="h-2 w-full rounded-full bg-slate-100">
-                        <div
-                          className={cn(
-                            "h-2 rounded-full",
-                            selectedBin.fill >= 80
-                              ? "bg-rose-500"
-                              : selectedBin.fill >= 50
-                              ? "bg-amber-400"
-                              : "bg-emerald-500"
-                          )}
-                          style={{ width: `${selectedBin.deviceSsid ? selectedBin.fill : 0}%` }}
-                        />
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white/80 p-3 text-xs text-slate-600">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          {selectedBin.deviceSsid ? (
-                            <Wifi className="h-4 w-4 text-emerald-600" />
-                          ) : (
-                            <WifiOff className="h-4 w-4 text-slate-400" />
-                          )}
-                          <span className="font-semibold text-slate-900">
-                            {selectedBin.deviceSsid ?? "No device linked"}
-                          </span>
-                        </div>
-                        {selectedBin.deviceSsid && (
-                          <button
-                            type="button"
-                            onClick={handleWifiDisconnect}
-                            className="text-xs font-semibold text-slate-500 hover:text-slate-700"
-                          >
-                            Disconnect
-                          </button>
-                        )}
-                      </div>
-                      <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
-                        <span>Last reading</span>
-                        <span className="font-semibold text-slate-700">{selectedBin.lastReading}</span>
-                      </div>
-                      <div className="mt-3 rounded-xl border border-slate-200 bg-white p-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div>
-                            <div className="text-xs font-semibold text-slate-900">Link to device WiFi</div>
-                            <div className="text-[11px] text-slate-500">Scan and connect this bin.</div>
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="rounded-full border-slate-200 bg-white"
-                            onClick={handleWifiScan}
-                            disabled={wifiScanning}
-                          >
-                            {wifiScanning ? "Scanning..." : "Scan WiFi"}
-                          </Button>
-                        </div>
-                        {wifiError && (
-                          <div className="mt-2 text-[11px] text-rose-600">{wifiError}</div>
-                        )}
-                        <div className="mt-2 space-y-2">
-                          {wifiNetworks.length === 0 && !wifiScanning ? (
-                            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-2 py-2 text-[11px] text-slate-500">
-                              No nearby devices detected yet.
-                            </div>
-                          ) : (
-                            wifiNetworks.map((network) => (
-                              <div
-                                key={network.id}
-                                className={cn(
-                                  "flex flex-wrap items-center justify-between gap-2 rounded-xl border px-2 py-2 text-[11px]",
-                                  selectedBin.deviceSsid === network.ssid
-                                    ? "border-emerald-200 bg-emerald-50"
-                                    : "border-slate-200 bg-white"
-                                )}
-                              >
-                                <div>
-                                  <div className="font-semibold text-slate-900">{network.ssid}</div>
-                                  <div className="text-[10px] text-slate-500">
-                                    Ch {network.channel} · {network.distance} · {network.secure ? "Secure" : "Open"}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[10px] font-semibold text-slate-500">
-                                    {rssiToPercent(network.rssi)}%
-                                  </span>
-                                  <Button
-                                    size="sm"
-                                    className="rounded-full"
-                                    onClick={() => handleWifiConnect(network.ssid)}
-                                    disabled={
-                                      wifiConnecting === network.ssid ||
-                                      selectedBin.deviceSsid === network.ssid
-                                    }
-                                  >
-                                    {selectedBin.deviceSsid === network.ssid
-                                      ? "Linked"
-                                      : wifiConnecting === network.ssid
-                                      ? "Linking"
-                                      : "Link"}
-                                  </Button>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    </div>
+
                     <div className="grid gap-2 md:grid-cols-2">
                       <div className="space-y-1">
-                        <label className="text-xs text-slate-500">Last collection</label>
+                        <label className="text-xs text-slate-500">Depth (cm)</label>
                         <input
-                          value={selectedBin.lastCollection}
-                          onChange={(event) =>
-                            updateSelectedBin({ lastCollection: event.target.value })
-                          }
+                          type="number"
+                          min={1}
+                          value={selectedBin.depth}
+                          onChange={(event) => {
+                            const parsed = toNumberOrNull(event.target.value);
+                            if (parsed === null) return;
+                            updateSelectedBin({ depth: Math.max(1, Math.round(parsed)) });
+                          }}
                           className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-xs text-slate-500">Status</label>
-                        <Badge className={cn("border", displayStatusBadge(selectedBin))}>
-                          {displayStatusLabel(selectedBin)}
+                        <label className="text-xs text-slate-500">Battery</label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={selectedBin.battery}
+                          onChange={(event) => {
+                            const parsed = toNumberOrNull(event.target.value);
+                            if (parsed === null) return;
+                            updateSelectedBin({ battery: clamp(Math.round(parsed), 0, 100) });
+                          }}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <span>Fill level</span>
+                        <span className="font-semibold text-slate-900">{selectedBin.fill}%</span>
+                      </div>
+                      <div className="h-2 w-full rounded-full bg-slate-100">
+                        <div
+                          className={cn("h-2 rounded-full", fillBarClass(selectedBin.fill))}
+                          style={{ width: `${selectedBin.fill}%` }}
+                        />
+                      </div>
+                      {selectedBin.deviceUid ? (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Read-only: updated automatically by backend sensors.
+                        </p>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            value={selectedBin.fill}
+                            onChange={(event) =>
+                              updateSelectedBin({ fill: clamp(Math.round(Number(event.target.value)), 0, 100) })
+                            }
+                            className="w-full"
+                          />
+                          <p className="text-xs text-slate-500">
+                            Manual test mode: adjust fill level then save changes.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                      <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2">
+                        <span className="text-xs text-slate-500">Coordinates</span>
+                        <span className="text-right text-sm font-semibold text-slate-700">
+                          {getCoordinatesLabel(selectedBin)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3 px-3 py-2">
+                        <span className="text-xs text-slate-500">Lifecycle</span>
+                        <Badge className={cn("border", statusBadgeClass(selectedBin.status))}>
+                          {statusLabels[selectedBin.status]}
                         </Badge>
                       </div>
                     </div>
-                    <div className="space-y-1">
-                      <label className="text-xs text-slate-500">Notes</label>
-                      <textarea
-                        rows={2}
-                        value={selectedBin.notes}
-                        onChange={(event) => updateSelectedBin({ notes: event.target.value })}
-                        className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-                      />
-                    </div>
+
                     <div className="flex flex-wrap gap-2">
                       <Button
                         size="sm"
                         variant="outline"
                         className={cn("rounded-full border-slate-200 bg-white", moveMode && "border-slate-900")}
                         onClick={() =>
-                          setMoveMode((prev) => {
-                            const next = !prev;
+                          setMoveMode((previous) => {
+                            const next = !previous;
                             if (next) setAddMode(false);
                             return next;
                           })
@@ -1008,21 +2067,35 @@ export default function SmartBinDashboard() {
                       </Button>
                       <Button
                         size="sm"
+                        variant="outline"
+                        className="rounded-full border-slate-200 bg-white"
+                        onClick={() => void handleSaveSelectedBin()}
+                        disabled={savingBinId === selectedBin.id}
+                      >
+                        {savingBinId === selectedBin.id ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Saving
+                          </>
+                        ) : (
+                          "Save changes"
+                        )}
+                      </Button>
+                      <Button
+                        size="sm"
                         variant="destructive"
                         className="rounded-full"
                         onClick={() => setDeleteDialogOpen(true)}
+                        disabled={savingBinId === selectedBin.id}
                       >
                         <Trash2 className="h-4 w-4" />
                         Delete
                       </Button>
                     </div>
-                    <Button size="sm" className="w-full rounded-full">
-                      Schedule pickup
-                    </Button>
                   </div>
                 ) : (
                   <div className="mt-4 text-sm text-slate-500">
-                    Click a bin on the map to view details.
+                    Click a bin on the map or in the table to view details.
                   </div>
                 )}
               </div>
@@ -1031,93 +2104,153 @@ export default function SmartBinDashboard() {
 
           <section
             id="bins"
-            className="rounded-3xl border border-white/60 bg-white/80 p-6 shadow-xl backdrop-blur scroll-mt-28"
+            className="scroll-mt-28 flex h-[42rem] flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/80 p-6 shadow-xl backdrop-blur"
           >
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-semibold">All bins</h2>
-                <p className="text-sm text-slate-500">Live list with fill levels.</p>
+                <p className="text-sm text-slate-500">Operational list for city teams.</p>
               </div>
-              <input
-                type="search"
-                placeholder="Search by ID or area"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className="w-full max-w-xs rounded-full border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:border-slate-400"
-              />
+              <div className="flex w-full flex-wrap items-center justify-end gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleBinsListScopeChange("active")}
+                    className={cn(
+                      "rounded-full border px-3 py-1 text-xs font-semibold transition",
+                      binsListScope === "active"
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-200 bg-white text-slate-600"
+                    )}
+                  >
+                    Active bins
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleBinsListScopeChange("unverified")}
+                    className={cn(
+                      "rounded-full border px-3 py-1 text-xs font-semibold transition",
+                      binsListScope === "unverified"
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-200 bg-white text-slate-600"
+                    )}
+                  >
+                    Not initialized bins
+                  </button>
+                </div>
+                <input
+                  type="search"
+                  placeholder="Search by ID or type"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  className="w-full max-w-xs rounded-full border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:border-slate-400"
+                />
+              </div>
             </div>
-            <div className="mt-6 overflow-x-auto">
+
+            <div key={binsListScope} className="mt-6 min-h-0 flex-1 overflow-y-auto">
               <table className="w-full text-left text-sm">
                 <thead className="text-xs uppercase text-slate-400">
                   <tr>
                     <th className="py-3">Bin ID</th>
-                    <th className="py-3">Area</th>
+                    <th className="py-3">Type</th>
                     <th className="py-3">Coordinates</th>
                     <th className="py-3">Fill level</th>
+                    <th className="py-3">Battery</th>
                     <th className="py-3">Status</th>
-                    <th className="py-3">Last collection</th>
+                    <th className="py-3">Predictions</th>
                     <th className="py-3">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredBins.map((bin) => (
-                    <tr
-                      key={bin.id}
-                      className={cn(
-                        "transition hover:bg-slate-50",
-                        selectedId === bin.id && "bg-emerald-50/60"
-                      )}
-                      onClick={() => handleSelectBin(bin.id)}
-                    >
-                      <td className="py-4 font-semibold text-slate-900">{bin.id}</td>
-                      <td className="py-4 text-slate-600">{bin.area}</td>
-                      <td className="py-4 text-slate-600">
-                        {formatCoords(bin.lat)}, {formatCoords(bin.lng)}
-                      </td>
-                      <td className="py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="h-2 w-24 rounded-full bg-slate-100">
-                            <div
-                              className={cn(
-                                "h-full rounded-full",
-                                bin.fill >= 80
-                                  ? "bg-rose-500"
-                                  : bin.fill >= 50
-                                  ? "bg-amber-400"
-                                  : "bg-emerald-500"
-                              )}
-                              style={{ width: `${bin.fill}%` }}
-                            />
-                          </div>
-                          <span className="text-xs font-semibold text-slate-600">{bin.fill}%</span>
-                        </div>
-                      </td>
-                      <td className="py-4">
-                        <Badge className={cn("border", displayStatusBadge(bin))}>
-                          {displayStatusLabel(bin)}
-                        </Badge>
-                      </td>
-                      <td className="py-4 text-slate-600">{bin.lastCollection}</td>
-                      <td className="py-4">
-                        <Button size="sm" variant="outline" className="rounded-full border-slate-200 bg-white">
-                          Schedule
-                        </Button>
+                  {binsLoading ? (
+                    <tr>
+                      <td className="py-8 text-center text-slate-500" colSpan={8}>
+                        Loading bins...
                       </td>
                     </tr>
-                  ))}
+                  ) : binsForTable.length === 0 ? (
+                    <tr>
+                      <td className="py-8 text-center text-slate-500" colSpan={8}>
+                        No bin found for this filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    binsForTable.map((bin) => (
+                      <tr
+                        key={bin.id}
+                        className={cn(
+                          "transition hover:bg-slate-50",
+                          selectedId === bin.id && "bg-emerald-50/60"
+                        )}
+                        onClick={() => handleSelectBin(bin.id)}
+                      >
+                        <td className="py-4 font-semibold text-slate-900">{bin.id}</td>
+                        <td className="py-4 text-slate-600">{getTypeCategoryLabel(bin.type)}</td>
+                        <td className="py-4 text-slate-600">{getCoordinatesLabel(bin)}</td>
+                        <td className="py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="h-2 w-24 rounded-full bg-slate-100">
+                              <div
+                                className={cn("h-full rounded-full", fillBarClass(bin.fill))}
+                                style={{ width: `${bin.fill}%` }}
+                              />
+                            </div>
+                            <span className="text-xs font-semibold text-slate-600">{bin.fill}%</span>
+                          </div>
+                        </td>
+                        <td className="py-4 text-slate-600">{bin.battery}%</td>
+                        <td className="py-4">
+                          <Badge className={cn("border", statusBadgeClass(bin.status))}>
+                            {statusLabels[bin.status]}
+                          </Badge>
+                        </td>
+                        <td className="py-4">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="rounded-full border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleOpenPredictionDialog(bin);
+                            }}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            See predictions
+                          </Button>
+                        </td>
+                        <td className="py-4">
+                          <Button size="sm" variant="outline" className="rounded-full border-slate-200 bg-white">
+                            Select
+                          </Button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
           </section>
         </div>
       </main>
+
+      <PredictionForecastModal
+        open={predictionDialogOpen}
+        onOpenChange={handlePredictionDialogChange}
+        bin={predictionTargetBin}
+        prediction={activePrediction}
+        loading={predictionLoading}
+        error={predictionError}
+        onRetry={handleRetryPrediction}
+      />
+
       <Dialog open={createDialogOpen} onOpenChange={handleCreateDialogChange}>
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto border border-slate-200 bg-white text-slate-900 shadow-2xl">
           <DialogHeader>
-            <DialogTitle>Create a new smart bin</DialogTitle>
+            <DialogTitle>Configure an unverified bin</DialogTitle>
             <DialogDescription>
-              Fill in the basic details, then connect the ESP32 over WiFi to fetch the first
-              sensor data.
+              Pick one unverified backend bin, then place it on the map and patch it to an
+              operational status.
             </DialogDescription>
           </DialogHeader>
 
@@ -1129,16 +2262,18 @@ export default function SmartBinDashboard() {
                 </div>
                 <div className="mt-3 grid gap-3">
                   <div className="space-y-1">
-                    <label className="text-xs text-slate-500">Bin ID (auto)</label>
-                    <Input value={nextBinIdPreview} readOnly className="rounded-xl bg-white" />
+                    <label className="text-xs text-slate-500">Selected bin</label>
+                    <Input
+                      value={createSelectedBin?.id ?? "No bin selected"}
+                      readOnly
+                      className="rounded-xl bg-white"
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
                       <label className="text-xs text-slate-500">Latitude</label>
                       <Input
-                        value={
-                          pendingAddCoords ? formatCoords(pendingAddCoords.lat) : "Not selected"
-                        }
+                        value={createPlacementCoords ? formatCoords(createPlacementCoords.lat) : "Not selected"}
                         readOnly
                         className="rounded-xl bg-white"
                       />
@@ -1146,47 +2281,57 @@ export default function SmartBinDashboard() {
                     <div className="space-y-1">
                       <label className="text-xs text-slate-500">Longitude</label>
                       <Input
-                        value={
-                          pendingAddCoords ? formatCoords(pendingAddCoords.lng) : "Not selected"
-                        }
+                        value={createPlacementCoords ? formatCoords(createPlacementCoords.lng) : "Not selected"}
                         readOnly
                         className="rounded-xl bg-white"
                       />
                     </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    {createLocationLocked
+                      ? "Location already provided by backend for this unverified bin. Manual placement is locked."
+                      : "No backend location yet. Use the clicked map position for this bin."}
                   </div>
                 </div>
               </div>
 
               <div className="space-y-3">
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-600">Area *</label>
-                  <Input
-                    value={createArea}
-                    onChange={(event) => {
-                      setCreateArea(event.target.value);
-                      setCreateFormError(null);
-                    }}
-                    placeholder="Ex: Eixample - Carrer de Mallorca"
-                    className="rounded-xl border-slate-200 bg-white"
-                  />
+                  <label className="text-xs font-semibold text-slate-600">Type</label>
+                  <select
+                    value={createType}
+                    onChange={(event) => setCreateType(event.target.value as BinType)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  >
+                    {BIN_TYPE_OPTIONS.map((type) => (
+                      <option key={type} value={type}>
+                        {typeLabels[type]}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-600">Last collection</label>
-                  <Input
-                    value={createLastCollection}
-                    onChange={(event) => setCreateLastCollection(event.target.value)}
-                    placeholder="new"
-                    className="rounded-xl border-slate-200 bg-white"
-                  />
+                  <label className="text-xs font-semibold text-slate-600">Status after configuration</label>
+                  <select
+                    value={createStatus}
+                    onChange={(event) => setCreateStatus(event.target.value as BinLifecycleStatus)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  >
+                    {CONFIGURABLE_BIN_STATUSES.map((status) => (
+                      <option key={status} value={status}>
+                        {statusLabels[status]}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-600">Notes</label>
-                  <textarea
-                    rows={3}
-                    value={createNotes}
-                    onChange={(event) => setCreateNotes(event.target.value)}
-                    placeholder="Installation notes, area constraints, etc."
-                    className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  <label className="text-xs font-semibold text-slate-600">Depth (cm)</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={createDepth}
+                    onChange={(event) => setCreateDepth(event.target.value)}
+                    className="rounded-xl border-slate-200 bg-white"
                   />
                 </div>
               </div>
@@ -1195,62 +2340,61 @@ export default function SmartBinDashboard() {
             <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <div className="text-sm font-semibold text-slate-900">ESP32 WiFi setup</div>
+                  <div className="text-sm font-semibold text-slate-900">Unverified bins</div>
                   <div className="text-xs text-slate-500">
-                    Scan, select an ESP32 network, then connect it.
+                    These bins are detected by backend but not yet placed on the map.
                   </div>
                 </div>
                 <Button
                   size="sm"
                   variant="outline"
                   className="rounded-full border-slate-200 bg-white"
-                  onClick={handleCreateWifiScan}
-                  disabled={createWifiScanning}
+                  onClick={() => void loadBins(true)}
+                  disabled={binsRefreshing}
                 >
-                  {createWifiScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wifi className="h-4 w-4" />}
-                  {createWifiScanning ? "Scanning..." : "Scan WiFi"}
+                  {binsRefreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                  {binsRefreshing ? "Refreshing" : "Refresh"}
                 </Button>
               </div>
 
-              {createWifiError && <div className="text-xs text-rose-600">{createWifiError}</div>}
-
-              <div className="space-y-2">
-                {createNetworks.length === 0 && !createWifiScanning ? (
+              <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                {unverifiedBins.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-xs text-slate-500">
-                    No network detected yet. Run a scan to find the ESP32.
+                    No unverified bins available. Initialize bins on-site first.
                   </div>
                 ) : (
-                  createNetworks.map((network) => {
-                    const isSelected = createSelectedNetworkId === network.id;
-                    const isLinked = createLinkedSsid === network.ssid;
+                  unverifiedBins.map((bin) => {
+                    const isSelected = createSelectedBinId === bin.id;
+
                     return (
                       <button
-                        key={network.id}
+                        key={bin.id}
                         type="button"
                         onClick={() => {
-                          setCreateSelectedNetworkId(network.id);
+                          setCreateSelectedBinId(bin.id);
                           setCreateFormError(null);
                         }}
                         className={cn(
                           "w-full rounded-2xl border p-3 text-left transition",
-                          isLinked
-                            ? "border-emerald-200 bg-emerald-50"
-                            : isSelected
+                          isSelected
                             ? "border-slate-400 bg-slate-50"
                             : "border-slate-200 bg-white hover:border-slate-300"
                         )}
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div>
-                            <div className="font-semibold text-slate-900">{network.ssid}</div>
+                            <div className="font-semibold text-slate-900">{bin.id}</div>
                             <div className="text-[11px] text-slate-500">
-                              Ch {network.channel} · {network.distance} ·{" "}
-                              {network.secure ? "Secure" : "Open"}
+                              Type {getTypeCategoryLabel(bin.type)} · Depth {bin.depth}cm
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-500">
+                              {bin.hasLocation
+                                ? `Backend location · ${formatCoords(bin.lat)}, ${formatCoords(bin.lng)}`
+                                : "Map position required"}
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-                            <span>{rssiToPercent(network.rssi)}%</span>
-                            {isLinked && <CheckCircle2 className="h-4 w-4 text-emerald-600" />}
+                          <div className="text-xs font-semibold text-slate-500">
+                            Fill {bin.fill}% · Battery {bin.battery}%
                           </div>
                         </div>
                       </button>
@@ -1259,50 +2403,25 @@ export default function SmartBinDashboard() {
                 )}
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs text-slate-600">
-                    {createLinkedSsid ? (
-                      <>
-                        <span className="font-semibold text-emerald-700">ESP32 linked:</span>{" "}
-                        {createLinkedSsid}
-                      </>
-                    ) : (
-                      "No ESP32 connected for this new bin."
-                    )}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="rounded-full border-slate-200 bg-white"
-                    onClick={handleCreateWifiConnect}
-                    disabled={!createSelectedNetwork || !!createWifiConnecting}
-                  >
-                    {createWifiConnecting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Connecting
-                      </>
-                    ) : (
-                      <>
-                        <Wifi className="h-4 w-4" />
-                        Connect & fetch
-                      </>
-                    )}
-                  </Button>
-                </div>
-                <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <span className="text-slate-500">Initial fill</span>
-                    <div className="font-semibold text-slate-900">
-                      {createInitialFill !== null ? `${createInitialFill}%` : "Not fetched"}
+              <div className="rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+                {createSelectedBin ? (
+                  <>
+                    <div>
+                      <span className="font-semibold text-slate-900">Ready to configure:</span>{" "}
+                      {createSelectedBin.id}
                     </div>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <span className="text-slate-500">Last reading</span>
-                    <div className="font-semibold text-slate-900">{createLastReading}</div>
-                  </div>
-                </div>
+                    <div className="mt-1">
+                      Status will move from <strong>Unverified</strong> to <strong>{statusLabels[createStatus]}</strong>.
+                    </div>
+                    <div className="mt-1">
+                      {createLocationLocked
+                        ? "Existing backend coordinates will be kept."
+                        : "The clicked map coordinates will be saved for this bin."}
+                    </div>
+                  </>
+                ) : (
+                  "Select an bin to continue."
+                )}
               </div>
             </div>
           </div>
@@ -1324,20 +2443,127 @@ export default function SmartBinDashboard() {
             <Button
               variant="outline"
               className="rounded-full border-slate-200 bg-white"
-              onClick={handleConfirmCreateBin}
-              disabled={!pendingAddCoords || !createArea.trim() || !createLinkedSsid}
+              onClick={() => void handleConfirmCreateBin()}
+              disabled={!createPlacementCoords || !createSelectedBinId || createSaving}
             >
-              Create bin
+              {createSaving ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Configuring
+                </>
+              ) : (
+                "Configure bin"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={routeDialogOpen}
+        onOpenChange={(open) => {
+          setRouteDialogOpen(open);
+          if (!open) setRouteDialogError(null);
+        }}
+      >
+        <DialogContent className="max-w-md border border-slate-200 bg-white text-slate-900 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-slate-900">Generate collection route</DialogTitle>
+            <DialogDescription className="text-slate-600">
+              Choose the bin type and planned collection start date/time. Trucks leave from and
+              return to the Joan Miro municipal depot.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-600">Bin type</label>
+              <select
+                value={routeDialogTypeFilter}
+                onChange={(event) =>
+                  setRouteDialogTypeFilter((event.target.value as MapTypeFilter | "") || "")
+                }
+                className="w-full cursor-pointer rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition hover:border-slate-400 focus:border-slate-400"
+              >
+                <option value="" disabled>
+                  Select bin type
+                </option>
+                {ROUTE_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-600">Collection date</label>
+              <div className="relative">
+                <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                <Input
+                  type="date"
+                  value={routeDialogDate}
+                  onChange={(event) => setRouteDialogDate(event.target.value)}
+                  className="cursor-pointer rounded-xl border-slate-200 bg-white pl-10 pr-10 text-slate-900 [color-scheme:light] transition hover:border-slate-400"
+                />
+                <MousePointerClick className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-600">Collection start time</label>
+              <div className="relative">
+                <Clock3 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                <Input
+                  type="time"
+                  step={300}
+                  value={routeDialogTime}
+                  onChange={(event) => setRouteDialogTime(event.target.value)}
+                  className="cursor-pointer rounded-xl border-slate-200 bg-white pl-10 pr-10 text-slate-900 [color-scheme:light] transition hover:border-slate-400"
+                />
+                <MousePointerClick className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              </div>
+            </div>
+
+            {routeDialogError && (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                {routeDialogError}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              className="rounded-full border-slate-300 bg-white text-slate-900 hover:bg-slate-50"
+              onClick={() => setRouteDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="rounded-full"
+              onClick={() => void handleConfirmGenerateRoute()}
+              disabled={routeLoading || !routeDialogTypeFilter}
+            >
+              {routeLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating
+                </>
+              ) : (
+                "Generate route"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md border border-slate-200 bg-white text-slate-900 shadow-2xl">
           <DialogHeader>
             <DialogTitle>Delete this bin?</DialogTitle>
             <DialogDescription>
-              This will permanently remove {selectedBin?.id ?? "this bin"} from the map and list.
+              This will mark {selectedBin?.id ?? "this bin"} as removed in backend.
             </DialogDescription>
           </DialogHeader>
           <div className="flex items-center gap-3 rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm text-rose-700">
@@ -1348,7 +2574,12 @@ export default function SmartBinDashboard() {
             <Button variant="outline" className="rounded-full" onClick={() => setDeleteDialogOpen(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" className="rounded-full" onClick={confirmDeleteSelected}>
+            <Button
+              variant="destructive"
+              className="rounded-full"
+              onClick={() => void handleDeleteSelected()}
+              disabled={!!selectedBin && savingBinId === selectedBin.id}
+            >
               Delete bin
             </Button>
           </DialogFooter>
