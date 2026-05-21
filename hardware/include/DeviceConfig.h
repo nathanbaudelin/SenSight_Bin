@@ -52,5 +52,7 @@ constexpr float kSensorMinDistanceCm = 2.0F;
 constexpr float kSensorMaxDistanceCm = 400.0F;
 constexpr uint32_t kWifiConnectTimeoutMs = 20000;
 constexpr uint32_t kButtonHoldForConfigMs = 1200;
+constexpr uint32_t kButtonHoldForFactoryResetMs = 10000;
+constexpr uint32_t kButtonDetectionWindowMs = 5000;
 constexpr uint32_t kRecoverySleepSeconds = 120;
 } // namespace DeviceDefaults

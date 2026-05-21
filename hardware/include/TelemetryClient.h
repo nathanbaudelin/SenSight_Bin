@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Arduino.h>
 #include <HTTPClient.h>
 #include <WiFiClient.h>
 
@@ -13,8 +14,10 @@ public:
                                       const RegistrationPayload &payload) const {
         WiFiClient client;
         HTTPClient http;
+        const String endpoint = config.registrationUrl();
 
-        if (!http.begin(client, config.registrationUrl())) {
+        if (!http.begin(client, endpoint)) {
+            Serial.println("HTTP begin failed for registration endpoint.");
             return {};
         }
 
@@ -22,8 +25,19 @@ public:
         http.addHeader("Content-Type", "application/json");
 
         const String body = buildRegistrationBody(payload);
+        Serial.print("POST ");
+        Serial.println(endpoint);
+        Serial.print("Registration payload: ");
+        Serial.println(body);
+
         const int statusCode = http.POST(body);
         const String responseBody = statusCode > 0 ? http.getString() : "";
+        Serial.print("Registration status: ");
+        Serial.println(statusCode);
+        if (!responseBody.isEmpty()) {
+            Serial.print("Registration response: ");
+            Serial.println(responseBody);
+        }
         http.end();
 
         if (statusCode < 200 || statusCode >= 300) {
@@ -47,8 +61,10 @@ public:
     bool sendMeasurement(const AppConfig &config, const TelemetryPayload &payload) const {
         WiFiClient client;
         HTTPClient http;
+        const String endpoint = config.measurementUrl();
 
-        if (!http.begin(client, config.measurementUrl())) {
+        if (!http.begin(client, endpoint)) {
+            Serial.println("HTTP begin failed for measurement endpoint.");
             return false;
         }
 
@@ -56,7 +72,52 @@ public:
         http.addHeader("Content-Type", "application/json");
 
         const String body = buildMeasurementBody(payload);
+        Serial.print("POST ");
+        Serial.println(endpoint);
+        Serial.print("Measurement payload: ");
+        Serial.println(body);
+
         const int statusCode = http.POST(body);
+        const String responseBody = statusCode > 0 ? http.getString() : "";
+        Serial.print("Measurement status: ");
+        Serial.println(statusCode);
+        if (!responseBody.isEmpty()) {
+            Serial.print("Measurement response: ");
+            Serial.println(responseBody);
+        }
+        http.end();
+
+        return statusCode >= 200 && statusCode < 300;
+    }
+
+    bool factoryResetBin(const AppConfig &config, bool purgeHistory = true) const {
+        if (config.binId.isEmpty()) {
+            return true;
+        }
+
+        WiFiClient client;
+        HTTPClient http;
+
+        const String endpoint = config.backendBaseUrlNormalized() + "/bins/" +
+                                config.binId + "/factory-reset?purgeHistory=" +
+                                String(purgeHistory ? "true" : "false");
+
+        if (!http.begin(client, endpoint)) {
+            Serial.println("HTTP begin failed for factory reset endpoint.");
+            return false;
+        }
+
+        http.setTimeout(DeviceDefaults::kHttpTimeoutMs);
+        Serial.print("PUT ");
+        Serial.println(endpoint);
+        const int statusCode = http.sendRequest("PUT", "");
+        const String responseBody = statusCode > 0 ? http.getString() : "";
+        Serial.print("Factory reset status: ");
+        Serial.println(statusCode);
+        if (!responseBody.isEmpty()) {
+            Serial.print("Factory reset response: ");
+            Serial.println(responseBody);
+        }
         http.end();
 
         return statusCode >= 200 && statusCode < 300;

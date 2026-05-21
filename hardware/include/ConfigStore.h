@@ -41,6 +41,10 @@ public:
         preferences_.putString("bin_id", binId);
     }
 
+    bool factoryReset() {
+        return preferences_.clear();
+    }
+
 private:
     mutable Preferences preferences_;
 };

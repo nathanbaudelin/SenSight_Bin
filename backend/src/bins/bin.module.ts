@@ -6,10 +6,16 @@ import { BinService } from './bin.service';
 import { CounterModule } from 'src/counter/counter.module';
 import { MeasurementModule } from 'src/measurements/measurement.module';
 import { AlertModule } from 'src/alerts/alert.module';
+import { Measurement, MeasurementSchema } from 'src/measurements/measurement.schema';
+import { Alert, AlertSchema } from 'src/alerts/alert.schema';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: Bin.name, schema: BinSchema }]),
+    MongooseModule.forFeature([
+      { name: Bin.name, schema: BinSchema },
+      { name: Measurement.name, schema: MeasurementSchema },
+      { name: Alert.name, schema: AlertSchema },
+    ]),
     CounterModule,
     MeasurementModule,
     forwardRef(() => AlertModule),

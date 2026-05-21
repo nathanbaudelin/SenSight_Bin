@@ -17,6 +17,7 @@ namespace {
 enum class BootAction {
     kMeasure,
     kConfigPortal,
+    kFactoryReset,
 };
 
 ConfigStore gStore;
@@ -42,19 +43,35 @@ void waitForButtonRelease() {
 }
 
 BootAction readBootAction() {
+    const uint32_t detectStart = millis();
+    while (digitalRead(DevicePins::kButton) != LOW &&
+           millis() - detectStart < DeviceDefaults::kButtonDetectionWindowMs) {
+        delay(10);
+    }
+
     if (digitalRead(DevicePins::kButton) != LOW) {
+        Serial.println("Boot action: measure (button not pressed).");
         return BootAction::kMeasure;
     }
 
     const uint32_t pressedAt = millis();
+    uint32_t heldFor = 0;
+    Serial.println("Button press detected. Measuring hold duration...");
     while (digitalRead(DevicePins::kButton) == LOW) {
-        const uint32_t heldFor = millis() - pressedAt;
-        if (heldFor >= DeviceDefaults::kButtonHoldForConfigMs) {
-            return BootAction::kConfigPortal;
+        heldFor = millis() - pressedAt;
+        if (heldFor >= DeviceDefaults::kButtonHoldForFactoryResetMs) {
+            Serial.println("Boot action: factory reset.");
+            return BootAction::kFactoryReset;
         }
         delay(10);
     }
 
+    if (heldFor >= DeviceDefaults::kButtonHoldForConfigMs) {
+        Serial.println("Boot action: config portal.");
+        return BootAction::kConfigPortal;
+    }
+
+    Serial.println("Boot action: measure (short button press).");
     return BootAction::kMeasure;
 }
 
@@ -133,6 +150,28 @@ bool runMeasurementCycle(const AppConfig &config) {
     }
 }
 
+[[noreturn]] void factoryResetAndEnterConfigMode(const AppConfig &config) {
+    if (!config.binId.isEmpty() && config.isProvisioned()) {
+        Serial.println("Factory reset requested. Attempting backend reset first...");
+        if (gWiFi.connect(config)) {
+            const bool backendReset = gTelemetry.factoryResetBin(config, true);
+            gWiFi.disconnect();
+            Serial.println(backendReset ? "Backend factory reset completed."
+                                        : "Backend factory reset failed.");
+        } else {
+            Serial.println("Wi-Fi unavailable. Skipping backend factory reset.");
+        }
+    } else {
+        Serial.println("No registered bin ID found. Skipping backend factory reset.");
+    }
+
+    Serial.println("Clearing local configuration...");
+    const bool cleared = gStore.factoryReset();
+    Serial.println(cleared ? "Factory reset completed." : "Factory reset failed.");
+    const AppConfig resetConfig = gStore.load();
+    enterConfigMode(resetConfig);
+}
+
 } // namespace
 
 void setup() {
@@ -150,6 +189,11 @@ void setup() {
 
     const AppConfig config = gStore.load();
     const BootAction bootAction = readBootAction();
+
+    if (bootAction == BootAction::kFactoryReset) {
+        waitForButtonRelease();
+        factoryResetAndEnterConfigMode(config);
+    }
 
     if (bootAction == BootAction::kConfigPortal || !config.isProvisioned()) {
         enterConfigMode(config);

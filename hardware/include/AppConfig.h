@@ -22,6 +22,10 @@ struct AppConfig {
         return normalizedBackendBaseUrl() + "/bins";
     }
 
+    String backendBaseUrlNormalized() const {
+        return normalizedBackendBaseUrl();
+    }
+
 private:
     String normalizedBackendBaseUrl() const {
         String url = backendBaseUrl;

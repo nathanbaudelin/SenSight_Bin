@@ -8,13 +8,14 @@ import { plainToInstance } from 'class-transformer';
 import { CounterService } from 'src/counter/counter.service';
 import { Location } from 'src/tools/tools';
 import { MeasurementCreateDto } from 'src/measurements/dtos/create-measurement.dto';
-import { Measurement } from 'src/measurements/measurement.schema';
+import { Measurement, MeasurementDocument } from 'src/measurements/measurement.schema';
 import { ApiException } from 'src/tools/api.exception';
 import { BinUpdateDto } from './dtos/update-bin.dto';
 import { PaginatedContentDto } from 'src/tools/pagination.dto';
 import { BinQueryDto } from './dtos/query-bin.dto';
-import { AlertStatus, AlertType, BinStatus } from 'src/tools/enums';
+import { AlertStatus, AlertType, BinStatus, BinType } from 'src/tools/enums';
 import { AlertService } from 'src/alerts/alert.service';
+import { Alert, AlertDocument } from 'src/alerts/alert.schema';
 
 // interface RegisterDeviceInput {
 //   device_uid: string;
@@ -29,6 +30,10 @@ export class BinService {
   constructor(
     @InjectModel(Bin.name)
     private binModel: Model<BinDocument>,
+    @InjectModel(Measurement.name)
+    private measurementModel: Model<MeasurementDocument>,
+    @InjectModel(Alert.name)
+    private alertModel: Model<AlertDocument>,
     private counterService: CounterService,
     private readonly alertService: AlertService,
   ) {}
@@ -40,6 +45,33 @@ export class BinService {
       });
 
       if (existingBin) {
+        if (existingBin.status === BinStatus.REMOVED) {
+          const reactivated = await this.binModel.findOneAndUpdate(
+            { id: existingBin.id },
+            {
+              $set: {
+                depth: bin.depth,
+                battery_level: bin.battery_level,
+                filling_level: 0,
+                status: BinStatus.UNVERIFIED,
+                type: BinType.UNKNOWN,
+              },
+              $unset: {
+                location: 1,
+              },
+            },
+            { returnDocument: 'after' },
+          );
+
+          if (!reactivated)
+            throw new ApiException('bin.not_found', 404, { binId: existingBin.id });
+
+          this.logger.log(
+            `Removed bin reactivated for uid=${bin.device_uid}, bin=${reactivated.id}`,
+          );
+          return plainToInstance(BinDto, reactivated.toObject());
+        }
+
         this.logger.log(
           `Existing device registration reused for uid=${bin.device_uid}, bin=${existingBin.id}`,
         );
@@ -153,6 +185,41 @@ export class BinService {
     const res = plainToInstance(BinDto, updated.toObject());
     if (res.location) res.location = plainToInstance(Location, res.location);
 
+    return res;
+  }
+
+  async factoryReset(binId: string, purgeHistory = false): Promise<BinDto> {
+    const bin = await this.binModel.findOne({ id: binId }).exec();
+
+    if (!bin) throw new ApiException('bin.not_found', 404, { binId });
+
+    const updated = await this.binModel.findOneAndUpdate(
+      { id: binId },
+      {
+        $set: {
+          status: BinStatus.UNVERIFIED,
+          type: BinType.UNKNOWN,
+          filling_level: 0,
+          battery_level: 0,
+        },
+        $unset: {
+          location: 1,
+        },
+      },
+      { returnDocument: 'after' },
+    );
+
+    if (!updated) throw new ApiException('bin.not_found', 404, { binId });
+
+    if (purgeHistory) {
+      await Promise.all([
+        this.measurementModel.deleteMany({ bin_id: binId }),
+        this.alertModel.deleteMany({ bin_id: binId }),
+      ]);
+    }
+
+    const res = plainToInstance(BinDto, updated.toObject());
+    if (res.location) res.location = plainToInstance(Location, res.location);
     return res;
   }
 
